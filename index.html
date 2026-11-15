@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DC MES · Login test</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{--green:#00A754;--navy:#0C4C7D;--ink:#1c2330;--muted:#667085;--line:#e3e6eb;--bg:#f3f7f4;--bad:#c23030;--ok:#0f9d58}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:14px}
+.wrap{max-width:760px;margin:40px auto;padding:0 16px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px;margin-bottom:16px}
+.logo{width:44px;height:44px;border-radius:10px;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;margin:0 auto 8px}
+h1{font-size:20px;margin:0;text-align:center}h2{font-size:16px;margin:0 0 12px}
+.sub{color:var(--muted);text-align:center;margin:4px 0 20px}
+label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+input,select{width:100%;height:38px;border:1px solid var(--line);border-radius:8px;padding:0 10px;font:inherit}
+input:focus,select:focus{outline:2px solid #d8f0e3;border-color:var(--green)}
+button{height:38px;border-radius:8px;border:1px solid var(--line);background:#fff;padding:0 14px;font:inherit;cursor:pointer}
+button.pri{background:var(--green);border-color:var(--green);color:#fff;width:100%;margin-top:14px}
+button.sm{height:30px;font-size:12px;padding:0 10px}
+.msg{margin-top:12px;font-size:13px;min-height:18px}.err{color:var(--bad)}.okm{color:var(--ok)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{flex:1}
+table{width:100%;border-collapse:collapse;margin-top:8px}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);font-size:13px}
+th{color:var(--navy);font-weight:500;background:#f1f8f3}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;background:#e3f4ea;color:#0b6b3a}
+.pill.off{background:#fbe9e9;color:var(--bad)}
+.link{background:none;border:none;color:var(--navy);text-decoration:underline;height:auto;padding:0;font-size:12px}
+.hide{display:none}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:6px 10px}.kv div:nth-child(odd){color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="card" id="signinCard" style="max-width:420px;margin:0 auto 16px">
+  <div class="logo">DC</div>
+  <h1>DC MES</h1>
+  <p class="sub">Sign in to continue · test version</p>
+  <div id="stepEmail">
+    <label for="email">Company email</label>
+    <input id="email" type="email" placeholder="name@dcevent.com" autocomplete="email">
+    <button class="pri" id="sendBtn">Send sign-in code</button>
+  </div>
+  <div id="stepCode" class="hide">
+    <label for="code">Or enter the code, if your email shows one</label>
+    <input id="code" inputmode="numeric" maxlength="10" placeholder="123456" autocomplete="one-time-code">
+    <button class="pri" id="verifyBtn">Sign in</button>
+    <div style="margin-top:10px"><button class="link" id="backBtn">Use a different email</button></div>
+  </div>
+  <div class="msg" id="signMsg"></div>
+  <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:10px">
+    <button class="link" id="bootToggle">First-time setup (create first admin)</button>
+    <div id="bootBox" class="hide">
+      <label for="bootName">Your name</label><input id="bootName" placeholder="Azher">
+      <label for="bootEmail">Admin email (must match the one set in Supabase)</label><input id="bootEmail" type="email" placeholder="name@dcevent.com">
+      <button class="pri" id="bootBtn">Create first admin</button>
+      <div class="msg" id="bootMsg"></div>
+    </div>
+  </div>
+</div>
+
+<div id="app" class="hide">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">My account</h2>
+      <button class="sm" id="outBtn" style="flex:0">Sign out</button>
+    </div>
+    <div class="kv" style="margin-top:12px" id="meBox"></div>
+  </div>
+
+  <div class="card hide" id="adminCard">
+    <h2>Admin · Users</h2>
+    <div class="row">
+      <div><label for="nName">Name</label><input id="nName" placeholder="Full name"></div>
+      <div><label for="nEmail">Company email</label><input id="nEmail" type="email" placeholder="name@dcevent.com"></div>
+      <div><label for="nRole">Role</label>
+        <select id="nRole">
+          <option value="">Select…</option>
+          <option value="exec">Executive (view only)</option>
+          <option value="pm">Project manager</option>
+          <option value="manager">Production manager</option>
+          <option value="storekeeper">Storekeeper</option>
+          <option value="supervisor">Supervisor</option>
+          <option value="team_leader">Team leader</option>
+          <option value="admin">Admin</option>
+        </select></div>
+    </div>
+    <button class="pri" id="inviteBtn" style="width:auto">Invite user</button>
+    <div class="msg" id="invMsg"></div>
+    <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th></th></tr></thead><tbody id="users"></tbody></table>
+  </div>
+</div>
+
+</div>
+<script>
+const SUPABASE_URL="https://iccutmlawnnldkqxstmw.supabase.co";
+const SUPABASE_KEY="sb_publishable_Dmq8eav0yxwH5N64kSjYEw_aw8vxTTs";
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+const $=id=>document.getElementById(id);
+const ROLE={admin:"Admin",exec:"Executive (view only)",pm:"Project manager",manager:"Production manager",supervisor:"Supervisor",storekeeper:"Storekeeper",team_leader:"Team leader"};
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt=t=>t?new Date(t).toLocaleString():"—";
+function msg(el,t,bad){el.textContent=t;el.className="msg "+(bad?"err":"okm")}
+let me=null;
+
+$("bootToggle").onclick=()=>$("bootBox").classList.toggle("hide");
+$("backBtn").onclick=()=>{$("stepCode").classList.add("hide");$("stepEmail").classList.remove("hide");msg($("signMsg"),"")};
+
+$("sendBtn").onclick=async()=>{
+  const email=$("email").value.trim().toLowerCase();
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))return msg($("signMsg"),"Enter a valid email",true);
+  $("sendBtn").disabled=true;
+  const {error}=await sb.auth.signInWithOtp({email,options:{shouldCreateUser:false,emailRedirectTo:location.origin+location.pathname}});
+  $("sendBtn").disabled=false;
+  if(error)return msg($("signMsg"),/signups not allowed|not found|Signups/i.test(error.message)?"This email has no account. Ask your admin to invite you.":error.message,true);
+  $("stepEmail").classList.add("hide");$("stepCode").classList.remove("hide");
+  msg($("signMsg"),"Email sent. Open it in this same browser and click Sign in (check spam too).");
+};
+
+$("verifyBtn").onclick=async()=>{
+  const email=$("email").value.trim().toLowerCase(),token=$("code").value.trim();
+  if(!/^\d{6,10}$/.test(token))return msg($("signMsg"),"Enter the code from the email",true);
+  $("verifyBtn").disabled=true;
+  const {error}=await sb.auth.verifyOtp({email,token,type:"email"});
+  $("verifyBtn").disabled=false;
+  if(error)return msg($("signMsg"),/banned/i.test(error.message)?"Your account is deactivated. Contact your admin.":"Code is wrong or expired. Try again.",true);
+  await loadMe();
+};
+
+$("bootBtn").onclick=async()=>{
+  const full_name=$("bootName").value.trim(),email=$("bootEmail").value.trim().toLowerCase();
+  if(!full_name||!email)return msg($("bootMsg"),"Enter your name and email",true);
+  const {data,error}=await sb.functions.invoke("invite-user",{body:{action:"invite",full_name,email,role:"admin"}});
+  if(error){let t="Not allowed";try{t=(await error.context.json()).error||t}catch(e){}return msg($("bootMsg"),t,true)}
+  msg($("bootMsg"),"Admin created. Now sign in above with "+data.email);$("email").value=data.email;
+};
+
+$("outBtn").onclick=async()=>{await sb.auth.signOut();me=null;show(false)};
+
+function show(signed){$("signinCard").classList.toggle("hide",signed);$("app").classList.toggle("hide",!signed);
+  if(!signed){$("stepCode").classList.add("hide");$("stepEmail").classList.remove("hide");$("code").value="";msg($("signMsg"),"")}}
+
+async function loadMe(){
+  const {data,error}=await sb.rpc("my_profile");
+  if(error||!data||!data.length){await sb.auth.signOut();show(false);return msg($("signMsg"),"Your account is not active in the MES. Contact your admin.",true)}
+  me=data[0];show(true);
+  $("meBox").innerHTML=`<div>Name</div><div><b>${esc(me.full_name)}</b></div><div>Email</div><div>${esc(me.email)}</div><div>Role</div><div><span class="pill">${esc(ROLE[me.role]||me.role)}</span></div><div>Signed in</div><div>${fmt(me.last_login_at)}</div>`;
+  $("adminCard").classList.toggle("hide",me.role!=="admin");
+  if(me.role==="admin")loadUsers();
+}
+
+async function loadUsers(){
+  const {data,error}=await sb.from("app_user").select("id,full_name,email,role,active,last_login_at").order("created_at");
+  if(error)return msg($("invMsg"),error.message,true);
+  $("users").innerHTML=data.map(u=>`<tr><td>${esc(u.full_name)}</td><td>${esc(u.email)}</td><td>${esc(ROLE[u.role]||u.role)}</td>
+   <td><span class="pill ${u.active?"":"off"}">${u.active?"Active":"Deactivated"}</span></td><td>${fmt(u.last_login_at)}</td>
+   <td>${u.id===me.id?"":`<button class="sm" data-u="${u.id}" data-a="${u.active?"deactivate":"reactivate"}">${u.active?"Deactivate":"Reactivate"}</button>`}</td></tr>`).join("");
+  document.querySelectorAll("[data-u]").forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    const {error}=await sb.functions.invoke("invite-user",{body:{action:b.dataset.a,user_id:b.dataset.u}});
+    if(error){let t="Could not update";try{t=(await error.context.json()).error||t}catch(e){}msg($("invMsg"),t,true)}
+    else msg($("invMsg"),b.dataset.a==="deactivate"?"User deactivated":"User reactivated");
+    loadUsers();
+  });
+}
+
+$("inviteBtn").onclick=async()=>{
+  const full_name=$("nName").value.trim(),email=$("nEmail").value.trim().toLowerCase(),role=$("nRole").value;
+  if(!full_name)return msg($("invMsg"),"Enter a name",true);
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))return msg($("invMsg"),"Enter a valid email",true);
+  if(!role)return msg($("invMsg"),"Pick a role",true);
+  $("inviteBtn").disabled=true;
+  const {data,error}=await sb.functions.invoke("invite-user",{body:{action:"invite",full_name,email,role}});
+  $("inviteBtn").disabled=false;
+  if(error){let t="Could not invite";try{t=(await error.context.json()).error||t}catch(e){}return msg($("invMsg"),t,true)}
+  msg($("invMsg"),`${full_name} added. They can sign in now with ${email}.`);
+  $("nName").value="";$("nEmail").value="";$("nRole").value="";loadUsers();
+};
+
+sb.auth.onAuthStateChange((ev,ses)=>{if(ev==="SIGNED_IN"&&ses&&!me)setTimeout(loadMe,0)});
+(async()=>{const {data}=await sb.auth.getSession();if(data.session&&!me)loadMe();})();
+</script>
+</body>
+</html>
