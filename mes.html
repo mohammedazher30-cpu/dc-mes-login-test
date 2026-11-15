@@ -2010,7 +2010,8 @@ persist=function(){const r=_sbPersist();if(!me||sbBooting)return r;
   return r};
 async function sbProfileToMe(){
   const {data,error}=await SB.rpc("my_profile");
-  if(error||!data||!data.length)return null;
+  if(error)return null;
+  if(!data||!data.length)return false;
   const p=data[0];
   const {data:row}=await SB.from("app_user").select("workshop_ids,operator_id").eq("id",p.id).maybeSingle();
   let ws=[];if(row&&row.workshop_ids&&row.workshop_ids.length){const {data:w}=await SB.from("workshop").select("id,code").in("id",row.workshop_ids);ws=(w||[]).map(x=>x.code)}
@@ -2022,7 +2023,8 @@ async function sbBoot(){
     const {data}=await SB.auth.getSession();
     if(!data.session){me=null;sbBooting=false;render();return}
     const u=await sbProfileToMe();
-    if(!u){await SB.auth.signOut();me=null;sbBooting=false;ui.sbMsg="Your account is not active in the MES. Contact your admin.";render();return}
+    if(u===false){await SB.auth.signOut({scope:"local"});me=null;sbBooting=false;ui.sbMsg="Your account is not active in the MES. Contact your admin.";render();return}
+    if(!u)throw new Error("Could not read your profile. Check your connection and try again.");
     $("#main").innerHTML=`<div class="empty">Loading projects from Supabase…</div>`;
     await sbLoadProjects();
     me=u;sbBooting=false;if(!myViews().includes(view))view=myViews()[0];render();
@@ -2049,10 +2051,10 @@ loginScreen=function(){
   $("#sbSend").onclick=send;$("#sbEmail").onkeydown=e=>{if(e.key==="Enter")send()};
   $("#langBtn2").onclick=()=>{$("#langBtn").click()};
 };
-logout=async function(){me=null;ui.tWarn=null;try{await SB.auth.signOut()}catch(e){}render()};
+logout=async function(){if(!confirm("Log out of the MES?"))return;me=null;ui.tWarn=null;try{await SB.auth.signOut({scope:"local"})}catch(e){}render()};
 const _sbRenderUser=renderUser;
 renderUser=function(){_sbRenderUser();const e=$("#userBox");if(e&&sbLastSync&&!e.querySelector(".sbstat"))e.insertAdjacentHTML("beforeend",`<div class="sbstat" style="font-size:11px;margin-top:6px;opacity:.8">● Supabase · ${sbLastSync.toLocaleTimeString()}</div>`)};
-SB.auth.onAuthStateChange((ev)=>{if(ev==="SIGNED_IN"&&!me)setTimeout(sbBoot,0);if(ev==="SIGNED_OUT"){me=null}});
+SB.auth.onAuthStateChange((ev)=>{if(ev==="SIGNED_IN"&&!me)setTimeout(sbBoot,0);if(ev==="SIGNED_OUT"&&me){me=null;console.warn("[MES] signed out");setTimeout(render,0)}});
 me=null;
 sbBoot();
 </script>
