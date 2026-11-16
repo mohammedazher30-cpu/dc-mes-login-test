@@ -767,7 +767,7 @@ function woDetail(){
     <div>${t("progress")}</div><div>${w.done} / ${w.planned} ${t("finishedQ").toLowerCase()} · ${t("scrapQ")} ${w.scrap}${w.rw?` · ${t("reworkQ")} ${w.rw}`:""}</div>
   </div>
   ${w.ops?`<div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">${t("routeProgress")}</h2>${canWO()&&isOpen(w)?`<button class="btn sec sm" id="editRoute">✎ ${t("editRouting")}</button>`:""}</div>${routeChips(w)}<table style="margin:6px 0 14px"><thead><tr><th>${t("step")}</th><th>${t("station")}</th><th class="num">${t("done")}</th><th class="num">${t("scrapQ")}</th><th>${t("status")}</th></tr></thead><tbody>${w.ops.map((o,i)=>`<tr><td><b>${o.seq}</b> · ${esc(opLabel(o))}</td><td style="font-size:12.5px">${esc(opStation(o))}</td><td class="num">${sTxt(w,i)}</td><td class="num">${o.scrap}${o.rw?` <span class="muted" style="font-size:11.5px">· ♻${o.rw}</span>`:""}</td><td>${opPill(opState(w,i))}</td></tr>`).join("")}<tr style="${w.ops.some(isTail)?"display:none":""}"><td>📦 ${t("packing")}</td><td style="font-size:12.5px">${t("dispatch")}</td><td colspan="2"></td><td>${curOpIdx(w)===-1?(w.ws!=="LOG"&&woDisp(w).shipped>=w.done&&w.done?`<span class="pill p-ok">✓ ${t("Packed")}</span>`:`<span class="pill p-blue">${t("readyPack")}</span>`):opPill("waiting")}</td></tr></tbody></table>`:""}
-  ${(()=>{if(w.ws==="LOG"||!w.done)return"";const d=woDisp(w);return `<h2>🚚 ${t("dispStatus")}</h2>${d.rows.length?`<table style="margin:6px 0 4px"><thead><tr><th>${t("shipment")}</th><th>${t("status")}</th><th class="num">${t("shipQty")}</th><th>${t("siteTime")}</th><th>${t("deliveredAt")}</th></tr></thead><tbody>${d.rows.map(r=>`<tr class="click" data-goship="${r.s.id}"><td><b>${r.s.id}</b>${r.s.extraTrip?` <span class="pill p-warn">${t("extraTrip")}</span>`:""}<div class="muted" style="font-size:12px">${esc(r.s.site||"")}</div></td><td>${shPill(r.s.status)}${shLate(r.s)?` <span class="pill p-bad">${t("late")}</span>`:""}</td><td class="num">${r.q}</td><td style="font-size:12.5px">${esc((r.s.siteTime||"").replace("T"," "))}</td><td style="font-size:12.5px">${r.s.deliveredAt?(()=>{const x=new Date(r.s.deliveredAt),p=n=>String(n).padStart(2,"0");return `${x.getFullYear()}-${p(x.getMonth()+1)}-${p(x.getDate())} ${p(x.getHours())}:${p(x.getMinutes())}`})():"—"}</td></tr>`).join("")}</tbody></table><div class="note" style="margin-bottom:14px">${t("dispNote")}</div>`:`<div class="muted" style="margin-bottom:14px">${t("notShipped")}</div>`}`})()}
+  ${(()=>{if(!isProdWO(w)||!w.done)return"";const d=woDisp(w);return `<h2>🚚 ${t("dispStatus")}</h2>${d.rows.length?`<table style="margin:6px 0 4px"><thead><tr><th>${t("shipment")}</th><th>${t("status")}</th><th class="num">${t("shipQty")}</th><th>${t("siteTime")}</th><th>${t("deliveredAt")}</th></tr></thead><tbody>${d.rows.map(r=>`<tr class="click" data-goship="${r.s.id}"><td><b>${r.s.id}</b>${r.s.extraTrip?` <span class="pill p-warn">${t("extraTrip")}</span>`:""}<div class="muted" style="font-size:12px">${esc(r.s.site||"")}</div></td><td>${shPill(r.s.status)}${shLate(r.s)?` <span class="pill p-bad">${t("late")}</span>`:""}</td><td class="num">${r.q}</td><td style="font-size:12.5px">${esc((r.s.siteTime||"").replace("T"," "))}</td><td style="font-size:12.5px">${r.s.deliveredAt?(()=>{const x=new Date(r.s.deliveredAt),p=n=>String(n).padStart(2,"0");return `${x.getFullYear()}-${p(x.getMonth()+1)}-${p(x.getDate())} ${p(x.getHours())}:${p(x.getMinutes())}`})():"—"}</td></tr>`).join("")}</tbody></table><div class="note" style="margin-bottom:14px">${t("dispNote")}</div>`:`<div class="muted" style="margin-bottom:14px">${t("notShipped")}</div>`}`})()}
   ${flow.length||(canWO()&&isOpen(w))?`<div class="row" style="margin-bottom:14px"><span class="muted">${t("next")}:</span>${flow.map(s=>`<button class="btn sm ${s==="Cancelled"?"danger":""}" data-next="${s}">${t(s)}</button>`).join("")}${canWO()&&isOpen(w)&&w.status!=="Planned"?`<button class="btn sm sec" id="closeShort">${t("closeShort")}</button>`:""}${canWO()&&isOpen(w)?`<button class="btn sm danger" id="cancelWO">${t("cancelWO")}</button>`:""}</div>`:""}
   ${w.cancel?`<div class="warnbox" style="margin-bottom:14px;background:var(--bad-soft);color:var(--bad)">${t("cancelledBy")} · ${esc(w.cancel.by)} · ${fmtDT(w.cancel.at)}${w.cancel.reason?" · "+esc(w.cancel.reason):""}</div>`:""}
   ${w.closedShort?`<div class="warnbox" style="margin-bottom:14px">${t("closedShort")} ${w.planned-w.done} · ${esc(w.closedShort.by)} · ${fmtDT(w.closedShort.at)}${w.closedShort.reason?" · "+esc(w.closedShort.reason):""}</div>`:""}
@@ -1452,7 +1452,7 @@ function buildOps(w){
   const P=R.map(r=>{const mid=r.machine||(by(db.machines,r.op)?r.op:""),m=by(db.machines,mid);return {seq:r.order,op:r.op,machine:mid,ws:m?m.ws:(OP_WS[r.op]||w.ws),done:0,scrap:0}}).filter(o=>!isLogOp(o));
   const w2={ops:P.length?P:[{seq:10,op:"PRODUCTION",machine:w.machine||"",ws:w.ws,done:0,scrap:0}],machine:w.machine,ws:w.ws};normalizeTail(w2);return w2.ops;
 }
-function ensureOps(){tagCrates();(db.workorders||[]).forEach(w=>{if(!w.ops)w.ops=[{seq:10,op:"PRODUCTION",machine:w.machine||"",ws:w.ws,done:w.done||0,scrap:w.scrap||0}];if(w.status!=="Cancelled"){const was=w.status;normalizeTail(w);syncWO(w,true);if(was==="Planned"&&w.status==="In progress"&&!w.ops.some(o=>o.done))w.status=was}})}
+function ensureOps(){tagCrates();syncTailFromCrates();(db.workorders||[]).forEach(w=>{if(!w.ops)w.ops=[{seq:10,op:"PRODUCTION",machine:w.machine||"",ws:w.ws,done:w.done||0,scrap:w.scrap||0}];if(w.status!=="Cancelled"){const was=w.status;normalizeTail(w);syncWO(w,true);if(was==="Planned"&&w.status==="In progress"&&!w.ops.some(o=>o.done))w.status=was}})}
 const onTruckWOs=()=>(db.workorders||[]).filter(w=>w.status!=="Cancelled"&&(w.ops||[]).some(isTail)&&(()=>{const L=w.ops.find(o=>o.tail&&o.machine==="LOADING"),D=w.ops.find(o=>o.tail&&o.machine==="DELIVERY");return L&&D&&L.done>D.done})());
 const prodLastIdx=w=>{let k=-1;w.ops.forEach((o,i)=>{if(!o.tail)k=i});return k};
 const prodDoneWO=w=>!!w&&(w.status==="Completed"||(w.ops&&prodLastIdx(w)>=0&&opComplete(w,prodLastIdx(w))));
@@ -1472,7 +1472,8 @@ const exOp=e=>e.op==null?0:e.op;
 const opName=id=>{if(!id)return"—";if(String(id).startsWith("U:"))return(by(db.users,id.slice(2))||{}).name||"—";return(by(db.operators,id)||{}).name||"—"};
 const opRunning=(w,i)=>db.executions.find(e=>e.wo===w.id&&exOp(e)===i&&!e.end);
 const opMatches=(o,m)=>o.machine?o.machine===m.id:o.ws===m.ws;
-const readyOn=m=>{let n=0;(db.workorders||[]).filter(x=>["Released","In progress"].includes(x.status)).forEach(x=>(x.ops||[]).forEach((o,i)=>{if(opMatches(o,m)&&!opComplete(x,i)&&opAvail(x,i)>0&&!opRunning(x,i))n++}));return n};
+const LOG_ST_G=[[/unload/i,["In transit"]],[/load/i,["Packed","Loaded"]],[/transit/i,["Loaded","In transit"]],[/deliver/i,["In transit"]],[/install/i,["Delivered"]]];
+const readyOn=m=>{if(!HIDE_DISPATCH&&(m.ws==="LOG"||m.ws==="SITE")){if(/pack/i.test(m.name))return readyToPack().length;const g=LOG_ST_G.find(x=>x[0].test(m.name));return g?(db.shipments||[]).filter(s=>g[1].includes(s.status)).length:0}let n=0;(db.workorders||[]).filter(x=>["Released","In progress"].includes(x.status)).forEach(x=>(x.ops||[]).forEach((o,i)=>{if(opMatches(o,m)&&!opComplete(x,i)&&opAvail(x,i)>0&&!opRunning(x,i))n++}));return n};
 const opLabel=o=>o.op==="PRODUCTION"?t("production"):((by(db.machines,o.machine||o.op)||{}).name||o.op.replace(/_/g," "));
 const opStation=o=>o.machine?(by(db.machines,o.machine)||{}).name||o.machine:wsName(o.ws);
 function opState(w,i){if(opComplete(w,i))return"done";if(w.closedShort)return"waiting";if(opRunning(w,i))return"running";if(opAvail(w,i)>0)return"ready";return"waiting"}
@@ -1509,14 +1510,24 @@ function postOp(w,i,g,s,exe,sr){
 }
 function postProduction(w,g,s,exe,sr){const i=exe?exOp(exe):curOpIdx(w);if(i<0)return;postOp(w,i,g,s,exe,sr)}
 /* every packed piece is linked to the work order it came from */
-const liveShips=()=>(db.shipments||[]).filter(s=>s.status!=="Returned");
+const liveShips=()=>(db.shipments||[]);
+const isProdWO=w=>(w.ops||[]).some(o=>!o.tail);
+/* one logistics flow: every work order's Packing / Loading / Delivery / Site Installation steps follow its crates (no typing on the terminal) */
+function syncTailFromCrates(){if(HIDE_DISPATCH)return;const Q={};
+  (db.shipments||[]).forEach(s=>{const inst=["Installed","Returned"].includes(s.status);(s.crates||[]).forEach(c=>(c.items||[]).forEach(i=>{if(!i.wo)return;
+    const q=Q[i.wo]||(Q[i.wo]={PACKING:0,LOADING:0,DELIVERY:0,SITE_INSTALLATION:0}),n=+i.qty||0;
+    q.PACKING+=n;if(c.loaded||c.delivered)q.LOADING+=n;if(c.delivered)q.DELIVERY+=n;if(inst&&c.delivered)q.SITE_INSTALLATION+=n}))});
+  (db.workorders||[]).forEach(w=>{if(w.status==="Cancelled"||!(w.ops||[]).some(isTail))return;const q=Q[w.id]||{};let prev=w.done||0,ch=false;
+    w.ops.forEach(o=>{if(!o.tail)return;const ws=OP_WS[o.machine];if(ws&&o.ws!==ws){o.ws=ws;ch=true}if(!(o.machine in{PACKING:1,LOADING:1,DELIVERY:1,SITE_INSTALLATION:1}))return;
+      const v=Math.max(0,Math.min(+q[o.machine]||0,prev));if(o.done!==v){o.done=v;ch=true}prev=v});
+    if(ch)syncWO(w)})}
 function packedWO(w){let n=0;liveShips().forEach(s=>(s.crates||[]).forEach(c=>c.items.forEach(i=>{if(i.wo===w.id)n+=i.qty})));return n}
-function tagCrates(){if(!db.shipments)return;const prodWOs=(proj,a)=>db.workorders.filter(w=>w.project===proj&&w.article===a&&w.ws!=="LOG"&&w.done>0);
+function tagCrates(){if(!db.shipments)return;const prodWOs=(proj,a)=>db.workorders.filter(w=>w.project===proj&&w.article===a&&isProdWO(w)&&w.done>0);
   liveShips().forEach(s=>(s.crates||[]).forEach(c=>{const out=[];c.items.forEach(i=>{if(i.wo){out.push(i);return}let left=i.qty;
     for(const w of prodWOs(s.project,i.article)){if(left<=0)break;const room=w.done-packedWO(w)-out.filter(x=>x.wo===w.id).reduce((t,x)=>t+x.qty,0);if(room<=0)continue;const q=Math.min(room,left);out.push({article:i.article,qty:q,wo:w.id});left-=q}
     if(left>0)out.push({article:i.article,qty:left})});c.items=out}))}
 const woRef=id=>{const w=by(db.workorders,id);return w?`${/^WO-/.test(w.id)?"":"WO "}${w.id}${w.custOrder?` · CO ${w.custOrder}`:""}`:""};
-function readyToPack(){return db.workorders.filter(w=>w.ws!=="LOG"&&w.done>0&&!(w.ops||[]).some(isTail)).map(w=>({w,p:by(db.projects,w.project)||{},a:w.article,q:w.done-packedWO(w)})).filter(r=>r.q>0)}
+function readyToPack(){return db.workorders.filter(w=>isProdWO(w)&&w.done>0).map(w=>({w,p:by(db.projects,w.project)||{},a:w.article,q:w.done-packedWO(w)})).filter(r=>r.q>0)}
 function routeEditor(w){
   const artR=(db.routing||[]).filter(r=>r.article===w.article);
   const tm=o=>{const r=artR.find(x=>x.order===o.seq&&(x.op===o.op||x.machine===o.machine));return r?r.time:0};const tu0=o=>{const r=artR.find(x=>x.order===o.seq&&(x.op===o.op||x.machine===o.machine));return r?tuOf(r):"h"};
@@ -1568,7 +1579,7 @@ function vTerm(){ui.tGood=+ui.tGood||0;ui.tScrap=+ui.tScrap||0;
   const pk=(ui.tOpPick||{})[m.ws],curOp=lockOp?me.op:ex?ex.operator:(me&&me.op&&(by(db.operators,me.op)||{}).ws===m.ws?me.op:(pk&&opsHere.some(o=>o.id===pk)?pk:(db.operators.find(o=>o.machine===m.id&&o.ws===m.ws)?.id||opsHere[0]?.id||"")));
   const jobs=[],upcoming=[];
   db.workorders.filter(x=>["Released","In progress"].includes(x.status)).forEach(x=>x.ops.forEach((o,i)=>{
-    if(!opMatches(o,m)||opComplete(x,i))return;if(ex&&ex.wo===x.id&&ei===i)return;
+    if(!opMatches(o,m)||opComplete(x,i)||(o.tail&&!HIDE_DISPATCH))return;if(ex&&ex.wo===x.id&&ei===i)return;
     const run=opRunning(x,i);if(opAvail(x,i)>0)jobs.push({w:x,i,o,run});else if(!run)upcoming.push({w:x,i,o})}));
   jobs.sort((a,b)=>a.w.due.localeCompare(b.w.due));
   const isPackSt=!HIDE_DISPATCH&&m.ws==="LOG"&&/pack/i.test(m.name),rtp=isPackSt?readyToPack():[];
@@ -1765,11 +1776,11 @@ const shPill=s=>{const c={Planned:"p-grey",Packed:"p-blue",Loaded:"p-blue","In t
 const shLate=s=>SH_FLOW.indexOf(s.status)<4&&s.siteTime&&new Date(s.siteTime)<new Date();
 const shOnTime=s=>s.deliveredAt&&s.siteTime&&new Date(s.deliveredAt)<=new Date(s.siteTime);
 const shItems=s=>{const m={};(s.crates||[]).forEach(c=>c.items.forEach(i=>m[i.article]=(m[i.article]||0)+i.qty));return m};
-function producedFor(project){const m={};db.workorders.filter(w=>w.project===project&&w.ws!=="LOG").forEach(w=>m[w.article]=(m[w.article]||0)+w.done);return m}
-function packedFor(project,exceptId){const m={};db.shipments.filter(s=>s.project===project&&s.id!==exceptId&&s.status!=="Returned").forEach(s=>{const x=shItems(s);for(const k in x)m[k]=(m[k]||0)+x[k]});return m}
+function producedFor(project){const m={};db.workorders.filter(w=>w.project===project&&isProdWO(w)).forEach(w=>m[w.article]=(m[w.article]||0)+w.done);return m}
+function packedFor(project,exceptId){const m={};db.shipments.filter(s=>s.project===project&&s.id!==exceptId).forEach(s=>{const x=shItems(s);for(const k in x)m[k]=(m[k]||0)+x[k]});return m}
 function woDisp(w){const rows=[],b={packed:0,truck:0,delivered:0,installed:0,returned:0};db.shipments.forEach(s=>{if(s.project!==w.project)return;let q=0;(s.crates||[]).forEach(c=>c.items.forEach(i=>{if(i.wo===w.id)q+=i.qty}));if(!q)return;rows.push({s,q});const k={Planned:"packed",Packed:"packed",Loaded:"truck","In transit":"truck",Delivered:"delivered",Installed:"installed",Returned:"returned"}[s.status];b[k]+=q});const shipped=b.packed+b.truck+b.delivered+b.installed;return {rows,b,shipped,cap:w.done}}
 function dispChips(w){if(w.ws==="LOG"||(w.ops||[]).some(isTail))return"";const d=woDisp(w),c=d.cap,ch=(lbl,n,cls)=>`<span class="rc ${n?cls:""}">${lbl}<small>${n}/${c}</small></span>`,ar='<span class="rc-arrow">→</span>';return ch("📦 "+t("Packed"),d.shipped,"rc-done")+ar+(()=>{const past=d.b.delivered+d.b.installed,n=d.b.truck+past;return `<span class="rc ${n?(past>=c?"rc-done":"rc-running"):""}">🚚 ${t("onTruck")}<small>${n}/${c}</small></span>`})()+ar+ch("📍 "+t("Delivered"),d.b.delivered+d.b.installed,"rc-done")+ar+ch("✅ "+t("Installed"),d.b.installed,"rc-done")}
-function dispLine(w){if((w.ops||[]).some(isTail)){if(!w.done)return"";const T=w.ops.filter(isTail),lb=["Packed","onTruck","Delivered","Installed"],ic=["📦","🚚","📍","✅"];let k=-1;T.forEach((o,i)=>{if(o.done>0)k=i});if(k<0)return `<div class="muted" style="font-size:11.5px">${t("notShipped")}</div>`;return `<div style="font-size:11.5px;color:var(--accent);font-weight:500;white-space:nowrap">${ic[k]} ${t(lb[k])} ${T[k].done}/${w.done}</div>`}if(w.ws==="LOG"||!w.done)return"";const d=woDisp(w);if(!d.shipped)return `<div class="muted" style="font-size:11.5px">${t("notShipped")}</div>`;const st=d.b.installed===d.cap?t("Installed"):d.b.delivered+d.b.installed>0?t("Delivered"):d.b.truck?t("onTruck"):t("Packed");const n=d.b.installed===d.cap?d.b.installed:d.b.delivered+d.b.installed>0?d.b.delivered+d.b.installed:d.b.truck||d.shipped;return `<div style="font-size:11.5px;color:var(--accent);font-weight:500;white-space:nowrap">🚚 ${st} ${n}/${d.cap}</div>`}
+function dispLine(w){if((w.ops||[]).some(isTail)){if(!w.done)return"";const T=w.ops.filter(isTail),lb=["Packed","onTruck","Delivered","Installed"],ic=["📦","🚚","📍","✅"];let k=-1;T.forEach((o,i)=>{if(o.done>0)k=i});if(k<0)return `<div class="muted" style="font-size:11.5px">${t("notShipped")}</div>`;return `<div style="font-size:11.5px;color:var(--accent);font-weight:500;white-space:nowrap">${ic[k]} ${t(lb[k])} ${T[k].done}/${w.done}</div>`}if(!isProdWO(w)||!w.done)return"";const d=woDisp(w);if(!d.shipped)return `<div class="muted" style="font-size:11.5px">${t("notShipped")}</div>`;const st=d.b.installed===d.cap?t("Installed"):d.b.delivered+d.b.installed>0?t("Delivered"):d.b.truck?t("onTruck"):t("Packed");const n=d.b.installed===d.cap?d.b.installed:d.b.delivered+d.b.installed>0?d.b.delivered+d.b.installed:d.b.truck||d.shipped;return `<div style="font-size:11.5px;color:var(--accent);font-weight:500;white-space:nowrap">🚚 ${st} ${n}/${d.cap}</div>`}
 function shLog(s,txt){s.log=s.log||[];s.log.push({ts:nowISO(),txt,by:me?me.name:""})}
 function qrInto(el,text){
   try{if(window.QRCode){el.innerHTML="";new QRCode(el,{text,width:el.dataset.size?+el.dataset.size:72,height:el.dataset.size?+el.dataset.size:72,correctLevel:QRCode.CorrectLevel.M});return}}catch(e){}
@@ -1928,7 +1939,7 @@ function nextAction(s,missLoad,missDel){
 let podPhoto=null;
 function bindShDetail(){
   const s=by(db.shipments,ui.shSel);if(!s)return;
-  const save=(msg)=>{persist();vDispatch();if(msg)toast(msg)};
+  const save=(msg)=>{tagCrates();syncTailFromCrates();persist();vDispatch();if(msg)toast(msg)};
   const setSt=(st)=>{s.status=st;shLog(s,t(st));if(st==="In transit")s.departedAt=nowISO();save(t("saved"))};
   const q=id=>document.getElementById(id);
   // packing
@@ -1957,7 +1968,7 @@ function bindShDetail(){
   // issues
   if(q("isAdd"))q("isAdd").onclick=()=>{const x=q("isX").value.trim(),c=q("isC").value;if(!x&&!c){toast(t("issueText"));return}s.issues=s.issues||[];const ty=q("isT").value;s.issues.push({type:ty,text:(c?c+" · ":"")+x,ts:nowISO()});if(ty==="Damage"&&c){const cc=s.crates.find(k=>k.id===c);if(cc)cc.damaged=true}if(ty==="Missing item")s.extraTripNeeded=true;shLog(s,t(ty)+": "+(c?c+" ":"")+x);save(t("saved"))};
 }
-function autoPackShipment(s,onlyWO){tagCrates();s.crates=s.crates||[];let seq=s.crates.length;db.workorders.filter(w=>w.project===s.project&&w.ws!=="LOG"&&w.done>0&&(!onlyWO||w.id===onlyWO)).forEach(w=>{const av=w.done-packedWO(w);if(av>0){seq++;s.crates.push({id:`${s.id}-C${String(s.crates.length+1).padStart(2,"0")}`,items:[{article:w.article,qty:av,wo:w.id}],installSeq:seq,loaded:false,delivered:false,by:me?me.name:"",at:nowISO()})}});shLog(s,t("autoPack"))}
+function autoPackShipment(s,onlyWO){tagCrates();s.crates=s.crates||[];let seq=s.crates.length;db.workorders.filter(w=>w.project===s.project&&isProdWO(w)&&w.done>0&&(!onlyWO||w.id===onlyWO)).forEach(w=>{const av=w.done-packedWO(w);if(av>0){seq++;s.crates.push({id:`${s.id}-C${String(s.crates.length+1).padStart(2,"0")}`,items:[{article:w.article,qty:av,wo:w.id}],installSeq:seq,loaded:false,delivered:false,by:me?me.name:"",at:nowISO()})}});shLog(s,t("autoPack"))}
 function showLabels(s){
   const p=by(db.projects,s.project)||{},C=s.crates||[],N=C.length;if(ui.lblCopies==null)ui.lblCopies=2;
   const one=c=>`<div class="label big"><div class="lb-top"><div class="qr" data-qr="${c.id}" data-size="130"></div><div class="lb-no"><div class="lb-x">${xOfN(C.indexOf(c)+1,N)}</div><b>${c.id}</b><div>${t("installSeq")} ${c.installSeq}</div></div></div>
@@ -2396,14 +2407,15 @@ function sbQueueShip(s){sbSnap.ship[s.id]=sbShipKey(s);if(!s.sbId)s.sbPending=tr
 
 /* push changes made in the MES back to Supabase: task status, station state, work orders, terminal records, shipments */
 const _sbPersist=persist;
-persist=function(){const r=_sbPersist();if(!me||sbBooting)return r;
+persist=function(){if(me&&!sbBooting){try{syncTailFromCrates()}catch(e){console.warn(e)}}const r=_sbPersist();if(!me||sbBooting)return r;
   (db.tasks||[]).filter(k=>k.sbId&&sbSnap.task[k.sbId]!==sbTaskKey(k)).forEach(k=>{sbSnap.task[k.sbId]=sbTaskKey(k);
     SB.from("project_task").update({status:k.status==="inprog"?"in progress":k.status,done_at:k.doneAt||null,done_by:k.doneBy||null,zoho_pct:Math.round(k.zohoPct||0)}).eq("id",k.sbId)
       .then(({error})=>{if(error){delete sbSnap.task[k.sbId];toast("Could not save task to Supabase")}})});
   (db.machines||[]).filter(x=>x.sbId&&sbSnap.mach[x.id]!==sbMachKey(x)).forEach(x=>{sbSnap.mach[x.id]=sbMachKey(x);
     SB.from("machine").update({state:["run","stopped","out"].includes(x.state)?x.state:"run",stop_reason:x.reason||null}).eq("id",x.sbId)
       .then(({error})=>{if(error){delete sbSnap.mach[x.id];toast("Could not save station state to Supabase")}})});
-  (db.workorders||[]).filter(w=>sbSnap.wo[w.id]!==sbWoKey(w)).forEach(sbQueueWO);
+  /* only work orders of projects that exist in Supabase (stops old demo orders being uploaded) */
+  (db.workorders||[]).filter(w=>sbSnap.wo[w.id]!==sbWoKey(w)&&(w.sbId||(by(db.projects,w.project)||{}).sbId)).forEach(sbQueueWO);
   sbSnap.ship=sbSnap.ship||{};(db.shipments||[]).filter(x=>sbSnap.ship[x.id]!==sbShipKey(x)).forEach(sbQueueShip);
   Object.keys(SB_LOGS).forEach(coll=>{sbSnap[coll]=sbSnap[coll]||{};(db[coll]||[]).filter(x=>sbSnap[coll][x.id]!==sbLogKey(x)).forEach(x=>sbQueueLog(coll,x))});
   return r};

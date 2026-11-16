@@ -349,14 +349,15 @@ function sbQueueShip(s){sbSnap.ship[s.id]=sbShipKey(s);if(!s.sbId)s.sbPending=tr
 
 /* push changes made in the MES back to Supabase: task status, station state, work orders, terminal records, shipments */
 const _sbPersist=persist;
-persist=function(){const r=_sbPersist();if(!me||sbBooting)return r;
+persist=function(){if(me&&!sbBooting){try{syncTailFromCrates()}catch(e){console.warn(e)}}const r=_sbPersist();if(!me||sbBooting)return r;
   (db.tasks||[]).filter(k=>k.sbId&&sbSnap.task[k.sbId]!==sbTaskKey(k)).forEach(k=>{sbSnap.task[k.sbId]=sbTaskKey(k);
     SB.from("project_task").update({status:k.status==="inprog"?"in progress":k.status,done_at:k.doneAt||null,done_by:k.doneBy||null,zoho_pct:Math.round(k.zohoPct||0)}).eq("id",k.sbId)
       .then(({error})=>{if(error){delete sbSnap.task[k.sbId];toast("Could not save task to Supabase")}})});
   (db.machines||[]).filter(x=>x.sbId&&sbSnap.mach[x.id]!==sbMachKey(x)).forEach(x=>{sbSnap.mach[x.id]=sbMachKey(x);
     SB.from("machine").update({state:["run","stopped","out"].includes(x.state)?x.state:"run",stop_reason:x.reason||null}).eq("id",x.sbId)
       .then(({error})=>{if(error){delete sbSnap.mach[x.id];toast("Could not save station state to Supabase")}})});
-  (db.workorders||[]).filter(w=>sbSnap.wo[w.id]!==sbWoKey(w)).forEach(sbQueueWO);
+  /* only work orders of projects that exist in Supabase (stops old demo orders being uploaded) */
+  (db.workorders||[]).filter(w=>sbSnap.wo[w.id]!==sbWoKey(w)&&(w.sbId||(by(db.projects,w.project)||{}).sbId)).forEach(sbQueueWO);
   sbSnap.ship=sbSnap.ship||{};(db.shipments||[]).filter(x=>sbSnap.ship[x.id]!==sbShipKey(x)).forEach(sbQueueShip);
   Object.keys(SB_LOGS).forEach(coll=>{sbSnap[coll]=sbSnap[coll]||{};(db[coll]||[]).filter(x=>sbSnap[coll][x.id]!==sbLogKey(x)).forEach(x=>sbQueueLog(coll,x))});
   return r};
