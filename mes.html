@@ -1607,7 +1607,7 @@ function vTerm(){ui.tGood=+ui.tGood||0;ui.tScrap=+ui.tScrap||0;
       ${!ex&&ui.tSel&&m.state!=="run"&&jobs.some(j=>j.w.id+"|"+j.i===ui.tSel)?`<div class="warnbox" style="margin-top:4px">⏸ ${t("resumeFirst")}</div>`:""}${!ex&&ui.tSel&&m.state==="run"&&jobs.some(j=>j.w.id+"|"+j.i===ui.tSel)?`<button class="btn big" id="tStart" style="width:100%;text-align:center;box-sizing:border-box">${t("startJob")} · ${ui.tSel.split("|")[0]}</button>`:""}
       ${upcoming.length?`<h2 style="margin-top:14px;font-size:13px" class="muted">${t("comingNext")} (${upcoming.length})</h2>${upcoming.map(u=>{const pi=u.i-1;return `<div class="job" style="opacity:.6;cursor:default"><div><b>${u.w.id}</b> · ${esc(opLabel(u.o))}<div class="muted" style="font-size:12px">${t("waitPrev")}: ${pi>=0?esc(opLabel(u.w.ops[pi]))+" ("+esc(opStation(u.w.ops[pi]))+")":"—"}</div></div><span class="pill p-grey">${t("stWaiting")}</span></div>`}).join("")}`:""}
       ${logSt?`<h2 style="margin-top:14px">🚚 ${t("shipAtStep")} (${logShips.length})</h2><div class="muted" style="font-size:12.5px;margin-bottom:8px">${t(logSt[2])}</div>${logShips.map(x=>{const pr=by(db.projects,x.project)||{},cr=x.crates||[],ld=cr.filter(c=>c.loaded).length,dl=cr.filter(c=>c.delivered).length,wos=[...new Set(cr.flatMap(c=>c.items.map(i=>i.wo)).filter(Boolean))];return `<div class="job" data-goshp="${x.id}"><div><b>${x.id}</b> · ${esc(pr.name||"")}<div style="font-size:12px;color:var(--accent);font-weight:500">${wos.map(woRef).map(esc).join("<br>")}</div><div class="muted" style="font-size:12px">${esc(x.site||"")} · ${esc(x.truck||"")} · ${t("loaded")} ${ld}/${cr.length} · ${t("deliveredC")} ${dl}/${cr.length}</div></div>${shPill(x.status)}</div>`}).join("")||`<div class="muted">${t("none")}</div>`}${logShips.length?`<div class="note">${t("tapShip")}</div>`:""}`:""}
-      ${isPackSt?`<h2 style="margin-top:14px">📦 ${t("readyPack")} (${rtp.reduce((s,r)=>s+r.q,0)})</h2>${rtp.map(r=>`<div class="job" style="cursor:default"><div><b>${esc(artName(r.a))}</b> × ${r.q}<div style="font-size:12px;color:var(--accent);font-weight:500">${esc(woRef(r.w.id))}</div><div class="muted" style="font-size:12px">${esc(r.p.name)}</div></div></div>`).join("")||`<div class="muted">${t("none")}</div>`}${rtp.length&&myViews().includes("dispatch")?`<button class="btn" id="goDisp" style="margin-top:6px">${t("goDispatch")} →</button>`:""}`:""}
+      ${isPackSt?`<h2 style="margin-top:14px">📦 ${t("readyPack")} (${rtp.reduce((s,r)=>s+r.q,0)})</h2>${rtp.map(r=>`<div class="job" style="cursor:default;justify-content:space-between;gap:8px"><div><b>${esc(artName(r.a))}</b> × ${r.q}<div style="font-size:12px;color:var(--accent);font-weight:500">${esc(woRef(r.w.id))}</div><div class="muted" style="font-size:12px">${esc(r.p.name)}</div></div><button class="btn sm" data-tpack="${r.w.id}">📦 ${t("packInto")}</button></div>`).join("")||`<div class="muted">${t("none")}</div>`}${packShipsPanel()}`:""}
     </div>
     <div class="card"><h2>${t("current")}</h2>
       ${ui.tWarn&&ui.tWarn.m===m.id?`<div class="warnbox" style="margin-bottom:10px">${esc(ui.tWarn.msg)} <span class="muted" style="font-weight:400">· ${esc(ui.tWarn.wo)}</span></div>`:""}
@@ -1638,6 +1638,9 @@ function vTerm(){ui.tGood=+ui.tGood||0;ui.tScrap=+ui.tScrap||0;
   document.querySelectorAll("[data-job]").forEach(j=>j.onclick=()=>{ui.tSel=j.dataset.job;vTerm()});
   const gd=$("#goDisp");if(gd)gd.onclick=()=>go("dispatch");
   document.querySelectorAll("[data-goshp]").forEach(b=>b.onclick=()=>{ui.shSel=b.dataset.goshp;ui.shF="active";go("dispatch")});
+  document.querySelectorAll("[data-tpack]").forEach(b=>b.onclick=()=>packFromStation(b.dataset.tpack));
+  document.querySelectorAll("[data-tlbl]").forEach(b=>b.onclick=()=>showLabels(by(db.shipments,b.dataset.tlbl)));
+  document.querySelectorAll("[data-tready]").forEach(b=>b.onclick=()=>{const s=by(db.shipments,b.dataset.tready);sendForCheck(s,(s.crates||[]).filter(c=>!c.sealed&&!c.ready));persist();vTerm();toast(t("saved"))});
   const st=$("#tStart");if(st)st.onclick=()=>{
     const op=$("#tOp").value;if(!op){toast(t("pickOperator"));return}
     const [wid,si]=ui.tSel.split("|"),i=+si,x=by(db.workorders,wid);if(opRunning(x,i)){toast(t("runningOther"));return}
@@ -1801,7 +1804,7 @@ function vDispatch(){
   if(!ui.shSel&&list[0])ui.shSel=list[0].id;
   $("#main").innerHTML=`<div class="head"><h1>${t("dispatch")}</h1>${canPlan()?`<button class="btn" id="nsh">+ ${t("newShipment")}</button>`:""}</div>
   <div class="grid kpis">${kpi(t("dispToday"),todayN)}${kpi(t("inTransit"),all.filter(s=>s.status==="In transit").length)}${kpi(t("lateDeliv"),all.filter(shLate).length,all.some(shLate)?"var(--bad)":"")}${kpi(t("onTimePct"),onTime)}${kpi(t("completePct"),complete)}${kpi(t("damages"),dmg,dmg?"var(--warn)":"")}${kpi(t("extraTrips"),extra)}</div>
-  ${(()=>{const rtp=readyToPack();return rtp.length?`<div class="readybox"><h2 style="margin:0 0 8px">📦 ${t("readyPack")} (${rtp.reduce((x,r)=>x+r.q,0)})</h2><table><thead><tr><th>${t("wo")} / ${t("custOrder")}</th><th>${t("project")}</th><th>${t("article")}</th><th class="num">${t("qty")}</th><th>${t("shipment")}</th><th></th></tr></thead><tbody>${rtp.map(r=>{const sh=db.shipments.find(x=>x.project===r.p.id&&x.status==="Planned");return `<tr><td><b>${esc(r.w.id)}</b>${r.w.custOrder?`<div class="muted" style="font-size:12px">CO ${esc(r.w.custOrder)}</div>`:""}</td><td>${esc(r.p.name)}<div class="muted" style="font-size:12px">${esc(r.p.customer)}</div></td><td>${esc(artName(r.a))}</td><td class="num"><b>${r.q}</b></td><td>${sh?sh.id:`<span class="muted">${t("none")}</span>`}</td><td class="num">${canPlan()||(me&&me.ws.includes("LOG"))?`<button class="btn sm" data-packp="${r.p.id}" data-packw="${r.w.id}">${t("packNow")} →</button>`:""}</td></tr>`}).join("")}</tbody></table></div>`:""})()}
+  ${pmCheckBox()}${(()=>{const rtp=readyToPack();return rtp.length?`<div class="readybox"><h2 style="margin:0 0 8px">📦 ${t("readyPack")} (${rtp.reduce((x,r)=>x+r.q,0)})</h2><table><thead><tr><th>${t("wo")} / ${t("custOrder")}</th><th>${t("project")}</th><th>${t("article")}</th><th class="num">${t("qty")}</th><th>${t("shipment")}</th><th></th></tr></thead><tbody>${rtp.map(r=>{const sh=db.shipments.find(x=>x.project===r.p.id&&x.status==="Planned");return `<tr><td><b>${esc(r.w.id)}</b>${r.w.custOrder?`<div class="muted" style="font-size:12px">CO ${esc(r.w.custOrder)}</div>`:""}</td><td>${esc(r.p.name)}<div class="muted" style="font-size:12px">${esc(r.p.customer)}</div></td><td>${esc(artName(r.a))}</td><td class="num"><b>${r.q}</b></td><td>${sh?sh.id:`<span class="muted">${t("none")}</span>`}</td><td class="num">${canPlan()||(me&&me.ws.includes("LOG"))?`<button class="btn sm" data-packp="${r.p.id}" data-packw="${r.w.id}">${t("packNow")} →</button>`:""}</td></tr>`}).join("")}</tbody></table></div>`:""})()}
   <div class="tabs">${[["active","shActive"],["late","tabLate"],["all","tabAll"]].map(([k,l])=>`<button class="${ui.shF===k?"active":""}" data-shf="${k}">${t(l)}</button>`).join("")}</div>
   <div class="split">
     <div class="card" style="padding:0;overflow:auto">${list.length?`<table><thead><tr><th>${t("shipment")}</th><th>${t("project")}</th><th>${t("siteTime")}</th><th>${t("truck")}</th><th>${t("crates")}</th><th>${t("status")}</th></tr></thead><tbody>
@@ -1813,6 +1816,7 @@ function vDispatch(){
   document.querySelectorAll("[data-sh]").forEach(r=>r.onclick=()=>{ui.shSel=r.dataset.sh;vDispatch()});
   const n=$("#nsh");if(n)n.onclick=()=>newShipment();
   document.querySelectorAll("[data-packp]").forEach(b=>b.onclick=()=>{const pid=b.dataset.packp,wid=b.dataset.packw;const sh=db.shipments.find(x=>x.project===pid&&x.status==="Planned");if(sh){autoPackShipment(sh,wid);ui.shSel=sh.id;ui.shF="active";persist();vDispatch();toast(t("saved"))}else newShipment(pid,wid)});
+  document.querySelectorAll("[data-chkship]").forEach(b=>b.onclick=()=>{ui.shSel=b.dataset.chkship;ui.shF="active";vDispatch()});
   bindShDetail();
 }
 const fmtDT=v=>v?new Date(v).toLocaleString(lang==="ar"?"ar-SA":"en-GB",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):"—";
@@ -1835,7 +1839,7 @@ function shDetail(){
     ${s.deliveredAt?`<div>${t("deliveredAt")}</div><div>${fmtDT(s.deliveredAt)} ${shOnTime(s)?`<span class="pill p-ok">${t("onTime")}</span>`:`<span class="pill p-warn">${t("late")}</span>`}</div>`:""}
   </div>
   ${s.status==="Planned"?packingPanel(s):""}
-  <div class="row" style="justify-content:space-between;margin:6px 0"><h2 style="margin:0">${t("crates")} (${cr.length})</h2>${cr.length?`<span class="row" style="gap:6px">${s.status==="Planned"&&canCheck()&&cr.some(c=>!c.sealed)?`<button class="btn sm" id="sealAll">✓ ${t("sealAll")}</button>`:""}<button class="btn sec sm" id="plPrint">📄 ${t("pl")}</button><button class="btn sec sm" id="lbls">🏷 ${t("labels")}</button></span>`:""}</div>
+  <div class="row" style="justify-content:space-between;margin:6px 0"><h2 style="margin:0">${t("crates")} (${cr.length})</h2>${cr.length?`<span class="row" style="gap:6px">${s.status==="Planned"&&!canCheck()&&cr.some(c=>!c.sealed&&!c.ready)?`<button class="btn sm" id="readyAll">${t("sendAllChk")}</button>`:""}${s.status==="Planned"&&canCheck()&&cr.some(c=>!c.sealed)?`<button class="btn sm" id="sealAll">✓ ${t("approveAll")}</button>`:""}<button class="btn sec sm" id="plPrint">📄 ${t("pl")}</button><button class="btn sec sm" id="lbls">🏷 ${t("labels")}</button></span>`:""}</div>
   ${scanStage?`<div class="scanbox"><input id="scan" placeholder="${t(scanStage==="load"?"scanLoad":"scanUnload")}" autocomplete="off"><button type="button" class="btn sm" id="scanGo">${t("scan")}</button></div>`:""}
   ${cr.length?`<table><thead><tr><th>${t("loadOrder")}</th><th>${t("crate")}</th><th>${t("contents")}</th><th>${t("checkedBy")}</th><th>${t("loaded")}</th><th>${t("deliveredC")}</th>${s.status==="Planned"?"<th></th>":""}</tr></thead><tbody>
    ${cr.map((c,k)=>`<tr><td class="num">${k+1}<div class="muted" style="font-size:11px">${t("installSeq")} ${c.installSeq}</div></td><td><b>${c.id}</b> <span class="muted" style="font-size:11px">${xOfN((s.crates||[]).indexOf(c)+1,(s.crates||[]).length)}</span>${c.damaged?` <span class="pill p-bad">${t("Damage")}</span>`:""}</td><td style="font-size:12.5px">${c.items.map(x=>`${x.qty} × ${esc(artName(x.article))}${x.wo?`<div class="muted" style="font-size:11px">${esc(woRef(x.wo))}</div>`:""}`).join("")}${c.by?`<div class="muted" style="font-size:11px">${t("packedBy")}: ${esc(c.by)}</div>`:""}</td><td>${chkCell(s,c)}</td><td>${c.loaded?"✅":scanStage==="load"?`<button class="btn sec sm" data-mk="${c.id}" data-st="loaded">✓</button>`:"—"}</td><td>${c.delivered?"✅":scanStage==="unload"?`<button class="btn sec sm" data-mk="${c.id}" data-st="delivered">✓</button>`:"—"}</td>${s.status==="Planned"?`<td>${c.sealed?"":`<button class="btn sec sm" data-rmc="${c.id}">✕</button>`}</td>`:""}</tr>`).join("")}
@@ -1873,12 +1877,58 @@ function shDetail(){
  .pl-doc th{-webkit-print-color-adjust:exact;print-color-adjust:exact}.pl-doc tr,.pl-sign{break-inside:avoid}
  .labels.a4{grid-template-columns:1fr 1fr!important;gap:5mm}.labels.a4 .label{height:128mm;overflow:hidden;break-inside:avoid;page-break-inside:avoid}}`;
  document.head.appendChild(st)})();
-const canCheck=()=>!!me&&["admin","manager","supervisor"].includes(me.role);
+const canCheck=()=>!!me&&["admin","manager"].includes(me.role);
 const xOfN=(x,n)=>t("xOfN").replace("{x}",x).replace("{n}",n);
-function chkCell(s,c){
-  if(c.sealed)return `<span class="pill p-ok">🔒 ${t("sealed")}</span><div class="muted" style="font-size:11px">${esc(c.chkBy||"")}</div>${s.status==="Planned"&&canCheck()?`<button class="btn sec sm" data-unseal="${c.id}" style="margin-top:4px">${t("unseal")}</button>`:""}`;
-  if(s.status!=="Planned")return "—";
-  return canCheck()?`<button class="btn sm" data-seal="${c.id}">✓ ${t("checkSeal")}</button>`:`<span class="muted" style="font-size:12px">${t("waitChk")}</span>`}
+function chkCell(s,c){const pl=s.status==="Planned";
+  if(c.sealed)return `<span class="pill p-ok">🔒 ${t("approved")}</span><div class="muted" style="font-size:11px">${esc(c.chkBy||"")}</div>${pl&&canCheck()?`<button class="btn sec sm" data-unseal="${c.id}" style="margin-top:4px">${t("unseal")}</button>`:""}`;
+  if(!pl)return "—";
+  const rej=c.rej&&!c.ready?`<div><span class="pill p-bad">✗ ${t("rejected")}: ${esc(t(c.rej.reason))}</span>${c.rej.note?`<div class="muted" style="font-size:11px">${esc(c.rej.note)}</div>`:""}</div>`:"";
+  if(canCheck())return rej+`<div class="row" style="gap:4px;margin-top:4px">${c.ready?`<span class="pill p-warn" style="font-size:11px">${t("sentChk")}</span>`:""}<button class="btn sm" data-seal="${c.id}">✓ ${t("approve")}</button><button class="btn sec sm" data-rej="${c.id}">✗ ${t("reject")}</button></div>`;
+  if(c.ready)return `<span class="pill p-warn">${t("waitChk")}</span>`;
+  return rej+`<button class="btn sm" data-ready="${c.id}" style="margin-top:4px">${t("sendChk")}</button>`}
+/* ---------- Production Manager check before loading ---------- */
+(()=>{const set=(L,o)=>{if(T[L])Object.assign(T[L],o)};
+ set("en",{sendChk:"Send for check",sendAllChk:"Send all for check",approve:"Approve",approveAll:"Approve all",reject:"Reject",rejected:"Rejected",approved:"Approved",sentChk:"Sent for check",
+  waitChk:"Waiting for Production Manager",chkOnly:"Only the Production Manager can approve crates",notChecked:"crate(s) not approved by the Production Manager yet",
+  toCheck:"Crates to check",chkList:"Check before loading",ck1:"Items and quantities match the label",ck2:"Quality and finish OK",ck3:"Wrapping / protection OK",ck4:"Labels on 2 sides",ckAll:"Tick all 4 checks to approve",
+  rejReason:"Reason",rejNote:"Note","Wrong quantity":"Wrong quantity","Damaged":"Damaged","Missing part":"Missing part","Wrong item":"Wrong item","Poor finish":"Poor finish",
+  supervisorL:"Production Manager",notSealedLoad:"not approved by the Production Manager – can't load",packInto:"Pack into crate",shipTo:"Shipment",newShipOpt:"+ New shipment",
+  beingPacked:"Shipments being packed",approvedN:"approved",readyN:"waiting check"});
+ set("ar",{sendChk:"إرسال للفحص",sendAllChk:"إرسال الكل للفحص",approve:"اعتماد",approveAll:"اعتماد الكل",reject:"رفض",rejected:"مرفوض",approved:"معتمد",sentChk:"أُرسل للفحص",
+  waitChk:"بانتظار مدير الإنتاج",chkOnly:"مدير الإنتاج فقط يمكنه اعتماد الصناديق",notChecked:"صندوق/صناديق لم يعتمدها مدير الإنتاج بعد",
+  toCheck:"صناديق للفحص",chkList:"الفحص قبل التحميل",ck1:"الأصناف والكميات مطابقة للملصق",ck2:"الجودة والتشطيب سليمة",ck3:"التغليف والحماية سليمة",ck4:"الملصقات على جهتين",ckAll:"ضع علامة على الفحوصات الأربعة للاعتماد",
+  rejReason:"السبب",rejNote:"ملاحظة","Wrong quantity":"كمية خاطئة","Damaged":"تالف","Missing part":"قطعة ناقصة","Wrong item":"صنف خاطئ","Poor finish":"تشطيب ضعيف","Other":"أخرى",
+  supervisorL:"مدير الإنتاج",notSealedLoad:"غير معتمد من مدير الإنتاج – لا يمكن تحميله",packInto:"تعبئة في صندوق",shipTo:"الشحنة",newShipOpt:"+ شحنة جديدة",
+  beingPacked:"شحنات قيد التعبئة",approvedN:"معتمد",readyN:"بانتظار الفحص"})})();
+const REJ_REASONS=["Wrong quantity","Damaged","Missing part","Wrong item","Poor finish","Other"];
+function sendForCheck(s,L){(L||[]).filter(Boolean).forEach(c=>{if(c.sealed||c.ready)return;c.ready=true;c.readyBy=me?me.name:"";c.readyAt=nowISO();shLog(s,t("sentChk")+": "+c.id)})}
+function shAutoPacked(s){if(s.status==="Planned"&&(s.crates||[]).length&&s.crates.every(c=>c.sealed)){s.status="Packed";shLog(s,t("Packed"))}}
+function approveCrates(s,L){L=(L||[]).filter(c=>c&&!c.sealed);if(!L.length)return;if(!canCheck()){toast(t("chkOnly"));return}
+  modal(t("chkList")+" · "+(L.length===1?L[0].id:L.length+" "+t("crates")),[1,2,3,4].map(k=>`<label class="row" style="gap:8px;margin-bottom:10px;font-size:14px"><input type="checkbox" name="ck${k}" style="width:20px;height:20px"> ${t("ck"+k)}</label>`).join(""),
+    f=>{if(![1,2,3,4].every(k=>f["ck"+k])){toast(t("ckAll"));return false}
+      L.forEach(c=>{c.sealed=true;c.ready=false;delete c.rej;c.chkBy=me?me.name:"";c.chkAt=nowISO();shLog(s,t("approved")+": "+c.id)});shAutoPacked(s);tagCrates();syncTailFromCrates()})}
+function rejectCrate(s,c){if(!c||!canCheck())return;
+  modal(t("reject")+" · "+c.id,fld(t("rejReason"),`<select name="reason">${REJ_REASONS.map(r=>`<option value="${r}">${esc(t(r))}</option>`).join("")}</select>`)+fld(t("rejNote"),`<input name="note">`),
+    f=>{c.rej={reason:f.reason,note:(f.note||"").trim(),by:me?me.name:"",at:nowISO()};c.ready=false;c.sealed=false;(s.rejects=s.rejects||[]).push(Object.assign({crate:c.id},c.rej));
+      shLog(s,"✗ "+t("rejected")+": "+c.id+" – "+t(f.reason)+(c.rej.note?" · "+c.rej.note:""))})}
+function pmCheckBox(){if(!canCheck())return"";const L=(db.shipments||[]).filter(s=>s.status==="Planned"&&(s.crates||[]).some(c=>c.ready&&!c.sealed));if(!L.length)return"";
+  return `<div class="readybox" style="border-color:var(--warn)"><h2 style="margin:0 0 8px">🔍 ${t("toCheck")} (${L.reduce((n,s)=>n+s.crates.filter(c=>c.ready&&!c.sealed).length,0)})</h2>${L.map(s=>{const p=by(db.projects,s.project)||{},n=s.crates.filter(c=>c.ready&&!c.sealed).length;
+    return `<div class="row" style="justify-content:space-between;padding:6px 0;border-top:1px solid var(--line)"><span><b>${s.id}</b> · ${esc(p.name||"")} <span class="muted">· ${fmtDT(s.siteTime)}</span></span><button class="btn sm" data-chkship="${s.id}">${n} ${t("crates")} → ${t("approve")}</button></div>`}).join("")}</div>`}
+/* Packing station: the Logistics team packs here */
+function packShipsPanel(){const L=(db.shipments||[]).filter(s=>s.status==="Planned");if(!L.length)return"";
+  return `<h2 style="margin-top:14px">🚚 ${t("beingPacked")} (${L.length})</h2>`+L.map(s=>{const p=by(db.projects,s.project)||{},C=s.crates||[],ok=C.filter(c=>c.sealed).length,rd=C.filter(c=>c.ready&&!c.sealed).length,R=C.filter(c=>c.rej&&!c.ready&&!c.sealed),nw=C.filter(c=>!c.sealed&&!c.ready).length;
+    return `<div class="job" style="cursor:default;display:block"><div class="row" style="justify-content:space-between"><b>${s.id} · ${esc(p.name||"")}</b><span class="muted" style="font-size:12px">${fmtDT(s.siteTime)}</span></div>
+    <div style="font-size:12px;margin:4px 0">${C.length} ${t("crates")} · ✓ ${ok} ${t("approvedN")} · ⏳ ${rd} ${t("readyN")}${R.length?` · <span style="color:var(--bad)">✗ ${R.length} ${t("rejected")}</span>`:""}</div>
+    ${R.map(c=>`<div style="font-size:12px;color:var(--bad)">✗ ${c.id}: ${esc(t(c.rej.reason))}${c.rej.note?" – "+esc(c.rej.note):""}</div>`).join("")}
+    <div class="row" style="gap:6px;margin-top:6px">${C.length?`<button class="btn sec sm" data-tlbl="${s.id}">🏷 ${t("labels")}</button>`:""}${nw?`<button class="btn sm" data-tready="${s.id}">${t("sendAllChk")} (${nw})</button>`:""}<button class="btn sec sm" data-goshp="${s.id}">${t("goDispatch")} →</button></div></div>`}).join("")}
+function packFromStation(wid){const r=readyToPack().find(x=>x.w.id===wid);if(!r)return;const L=(db.shipments||[]).filter(s=>s.project===r.w.project&&s.status==="Planned");
+  if(!L.length){newShipment(r.w.project,wid);return}
+  modal(t("packInto")+" · "+artName(r.a),fld(t("shipTo"),`<select name="sh">${L.map(s=>`<option value="${s.id}">${s.id} · ${esc(s.site||"")} · ${fmtDT(s.siteTime)}</option>`).join("")}<option value="__new">${t("newShipOpt")}</option></select>`)+
+    fld(t("qty")+" (max "+r.q+")",`<input name="q" type="number" min="1" max="${r.q}" value="${r.q}">`)+fld(t("installSeq"),`<input name="seq" type="number" min="1">`),
+    f=>{if(f.sh==="__new"){setTimeout(()=>newShipment(r.w.project,wid),0);return}const s=by(db.shipments,f.sh),n=Math.min(r.q,parseInt(f.q)||0);if(!s||n<1){toast(t("qtyRange")+" 1–"+r.q);return false}
+      s.crates=s.crates||[];let k=s.crates.length+1,id;do{id=`${s.id}-C${String(k++).padStart(2,"0")}`}while(s.crates.some(c=>c.id===id));
+      s.crates.push({id,items:[{article:r.a,qty:n,wo:wid}],installSeq:parseInt(f.seq)||s.crates.length+1,loaded:false,delivered:false,by:me?me.name:"",at:nowISO()});
+      shLog(s,t("addCrate")+" "+artName(r.a)+" × "+n);tagCrates();syncTailFromCrates()})}
 function showPackingList(s){
   const p=by(db.projects,s.project)||{},drv=by(db.operators,s.driver),C=s.crates||[],N=C.length;
   const L=C.slice().sort((a,b)=>b.installSeq-a.installSeq);
@@ -1947,15 +1997,17 @@ function bindShDetail(){
   if(q("pkAuto"))q("pkAuto").onclick=()=>{autoPackShipment(s);save()};
   document.querySelectorAll("[data-rmc]").forEach(b=>b.onclick=()=>{s.crates=s.crates.filter(c=>c.id!==b.dataset.rmc);save()});
   // scanning
-  const doScan=code=>{code=(code||"").trim().toUpperCase();const c=(s.crates||[]).find(x=>x.id===code);if(!c){toast(t("notOnShipment")+": "+code);return}const f=s.status==="Packed"?"loaded":"delivered";if(c[f]){toast(code+" "+t("alreadyScanned"));return}c[f]=true;shLog(s,(f==="loaded"?t("scanLoad"):t("scanUnload"))+": "+code);save("✓ "+code)};
+  const doScan=code=>{code=(code||"").trim().toUpperCase();const c=(s.crates||[]).find(x=>x.id===code);if(!c){toast(t("notOnShipment")+": "+code);return}const f=s.status==="Packed"?"loaded":"delivered";if(f==="loaded"&&!c.sealed){toast(c.id+": "+t("notSealedLoad"));return}if(c[f]){toast(code+" "+t("alreadyScanned"));return}c[f]=true;shLog(s,(f==="loaded"?t("scanLoad"):t("scanUnload"))+": "+code);save("✓ "+code)};
   if(q("scanGo")){q("scanGo").onclick=()=>doScan(q("scan").value);q("scan").onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();doScan(q("scan").value)}};q("scan").focus()}
-  document.querySelectorAll("[data-mk]").forEach(b=>b.onclick=()=>{const c=s.crates.find(x=>x.id===b.dataset.mk);c[b.dataset.st]=true;shLog(s,(b.dataset.st==="loaded"?t("scanLoad"):t("scanUnload"))+": "+c.id+" ("+t("manual")+")");save()});
+  document.querySelectorAll("[data-mk]").forEach(b=>b.onclick=()=>{const c=s.crates.find(x=>x.id===b.dataset.mk);if(b.dataset.st==="loaded"&&!c.sealed){toast(c.id+": "+t("notSealedLoad"));return}c[b.dataset.st]=true;shLog(s,(b.dataset.st==="loaded"?t("scanLoad"):t("scanUnload"))+": "+c.id+" ("+t("manual")+")");save()});
   // labels
   if(q("lbls"))q("lbls").onclick=()=>showLabels(s);
   if(q("plPrint"))q("plPrint").onclick=()=>showPackingList(s);
-  const seal=c=>{if(!c||c.sealed)return;c.sealed=true;c.chkBy=me?me.name:"";c.chkAt=nowISO();shLog(s,t("checkSeal")+": "+c.id)};
-  document.querySelectorAll("[data-seal]").forEach(b=>b.onclick=()=>{if(!canCheck()){toast(t("chkOnly"));return}seal(s.crates.find(x=>x.id===b.dataset.seal));save(t("saved"))});
-  if(q("sealAll"))q("sealAll").onclick=()=>{if(!canCheck()){toast(t("chkOnly"));return}(s.crates||[]).forEach(seal);save(t("saved"))};
+  document.querySelectorAll("[data-seal]").forEach(b=>b.onclick=()=>approveCrates(s,[s.crates.find(x=>x.id===b.dataset.seal)]));
+  if(q("sealAll"))q("sealAll").onclick=()=>approveCrates(s,(s.crates||[]).filter(c=>!c.sealed));
+  document.querySelectorAll("[data-rej]").forEach(b=>b.onclick=()=>rejectCrate(s,s.crates.find(x=>x.id===b.dataset.rej)));
+  document.querySelectorAll("[data-ready]").forEach(b=>b.onclick=()=>{sendForCheck(s,[s.crates.find(x=>x.id===b.dataset.ready)]);save(t("saved"))});
+  if(q("readyAll"))q("readyAll").onclick=()=>{sendForCheck(s,(s.crates||[]).filter(c=>!c.sealed&&!c.ready));save(t("saved"))};
   document.querySelectorAll("[data-unseal]").forEach(b=>b.onclick=()=>{if(!canCheck())return;const c=s.crates.find(x=>x.id===b.dataset.unseal);c.sealed=false;delete c.chkBy;delete c.chkAt;shLog(s,t("unseal")+": "+c.id);save()});
   // status
   if(q("toPacked"))q("toPacked").onclick=()=>{if(!(s.crates||[]).length){toast(t("noCrates"));return}const nc=(s.crates||[]).filter(c=>!c.sealed).length;if(nc){toast("⚠ "+nc+" "+t("notChecked"));return}setSt("Packed")};
@@ -2385,7 +2437,8 @@ async function sbSaveShip(s){
   for(const c of s.crates||[])for(const i of c.items||[])if(i.wo&&sbWoQ[i.wo])await sbWoQ[i.wo];
   await sbOk(SB.from("crate").delete().eq("shipment_id",sid));
   const C=(s.crates||[]).map(c=>({shipment_id:sid,code:c.id,install_seq:c.installSeq!=null?+c.installSeq:null,loaded:!!c.loaded,delivered:!!c.delivered,damaged:!!c.damaged,
-    packed_by:c.by||null,packed_at:sbTs(c.at),sealed:!!c.sealed,checked_by:c.chkBy||null,checked_at:sbTs(c.chkAt)}));
+    packed_by:c.by||null,packed_at:sbTs(c.at),sealed:!!c.sealed,checked_by:c.chkBy||null,checked_at:sbTs(c.chkAt),
+    sent_for_check:!!c.ready,reject_reason:c.rej&&c.rej.reason||null,reject_note:c.rej&&c.rej.note||null,rejected_by:c.rej&&c.rej.by||null,rejected_at:c.rej?sbTs(c.rej.at):null}));
   if(C.length){const {data:cr,error}=await SB.from("crate").insert(C).select("id,code");if(error)throw error;
     const cid={};cr.forEach(x=>cid[x.code]=x.id);const I=[];
     (s.crates||[]).forEach(c=>(c.items||[]).forEach(i=>{const a=sbArtU(i.article);if(a&&+i.qty>0)I.push({crate_id:cid[c.id],article_id:a,work_order_id:i.wo?sbWoU(i.wo):null,qty:+i.qty})}));
