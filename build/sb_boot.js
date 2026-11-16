@@ -56,6 +56,10 @@ async function sbLoadMaster(){
   /* stations (machines in the demo) */
   db.machines=m.data.map(x=>{sbMap.mach[x.id]=x.code;sbMap.machCode[x.code]=x.id;const ex=(db.machines||[]).find(y=>y.id===x.code)||{};
     return Object.assign(ex,{id:x.code,ws:x.workshop&&x.workshop.code,name:x.name,state:x.state||"run",reason:x.stop_reason||"",sbId:x.id})});
+  { const LO=["PACKING","LOADING","TRANSIT","TRUCK_UNLOADING","DELIVERY","SITE_INSTALLATION"],idx=[];
+    db.machines.forEach((x,i)=>{if(x.ws==="LOG")idx.push(i)});
+    const lg=idx.map(i=>db.machines[i]).sort((a,b)=>{const i=LO.indexOf(a.id),j=LO.indexOf(b.id);return (i<0?99:i)-(j<0?99:j)});
+    idx.forEach((i,k)=>db.machines[i]=lg[k]) }
   applyPhotos();
   sbSnap.mach={};db.machines.forEach(x=>sbSnap.mach[x.id]=sbMachKey(x));
   /* physical machines */
@@ -259,7 +263,90 @@ function sbDelta(w){const base=sbBase[w.id];if(!base)return null;const dl={};
   (w.ops||[]).forEach(o=>{const bo=(base.ops||[]).find(x=>+x.seq===+o.seq);if(!bo)return;const d={};SB_NUM.forEach(f=>{const x=(+o[f]||0)-(+bo[f]||0);if(x)d[f]=x});if(Object.keys(d).length)dl[o.seq]=d});
   return dl}
 
-/* push changes made in the MES back to Supabase: task status, station state, work orders, terminal records */
+
+/* ---- part 6: dispatch (shipments, QR crates, proof of delivery, site issues, history) ---- */
+const SB_SH_ST=["Planned","Packed","Loaded","In transit","Delivered","Installed","Returned"];
+const SB_ISSUE=["Damage","Missing item","Site not ready","Access / permit","Other"];
+let sbShipBase={};const sbShipQ=new WeakMap();
+const sbShipKey=s=>JSON.stringify(sbClean(s));
+const sbProjL=u=>{const p=db.projects.find(x=>x.sbId===u);return p?p.id:""};
+const sbTs=v=>{if(!v)return null;const d=new Date(v);return isNaN(d)?null:d.toISOString()};
+const sbOk=async q=>{const {error}=await q;if(error)throw error};
+const sbJ=x=>x===undefined?"~":JSON.stringify(x);
+async function sbLoadShipments(){
+  const rows=await sbAll(()=>SB.from("shipment").select("id,code,project_id,status,props").order("created_at"));
+  const L=rows.map(r=>{const b=Object.assign({crates:[],issues:[],log:[]},(r.props&&r.props.sh)||{});
+    return Object.assign(b,{id:r.code,sbId:r.id,project:sbProjL(r.project_id)||b.project,status:r.status})}).filter(s=>s.project);
+  const ids=new Set(L.map(s=>s.id));
+  const pend=(db.shipments||[]).filter(s=>s.sbPending&&!ids.has(s.id));
+  db.shipments=L.concat(pend);
+  const mx=L.reduce((m,s)=>Math.max(m,parseInt(String(s.id).replace(/^\D+/,""))||0),0);db.seq.ship=Math.max(db.seq.ship||0,mx);
+  sbSnap.ship={};L.forEach(s=>{sbSnap.ship[s.id]=sbShipKey(s);sbShipBase[s.id]=JSON.parse(JSON.stringify(sbClean(s)))});
+  return {n:L.length};
+}
+/* two devices on one shipment (office + loading station): keep both sides' scans, crates, issues and history */
+async function sbMergeShip(s){
+  if(!s.sbId)return null;
+  const {data,error}=await SB.from("shipment").select("props,updated_at").eq("id",s.sbId).maybeSingle();
+  if(error||!data)return null;
+  const srv=data.props&&data.props.sh,base=sbShipBase[s.id];if(!srv||!base)return data.updated_at;
+  const M=a=>new Map((a||[]).map(c=>[c.id,c]));const B=M(base.crates),S=M(srv.crates);
+  s.crates=s.crates||[];const Lc=M(s.crates);
+  (srv.crates||[]).forEach(c=>{if(!B.has(c.id)&&!Lc.has(c.id))s.crates.push(JSON.parse(JSON.stringify(c)))});
+  s.crates=s.crates.filter(c=>!(B.has(c.id)&&!S.has(c.id)&&sbJ(c)===sbJ(B.get(c.id))));
+  s.crates.forEach(c=>{const o=S.get(c.id),b=B.get(c.id);if(!o||!b)return;
+    Object.keys(Object.assign({},o,b,c)).forEach(f=>{if(sbJ(c[f])===sbJ(b[f])&&sbJ(o[f])!==sbJ(c[f])){if(o[f]===undefined)delete c[f];else c[f]=JSON.parse(JSON.stringify(o[f]))}})});
+  ["issues","log"].forEach(f=>{s[f]=s[f]||[];const have=new Set(s[f].map(sbJ));(srv[f]||[]).forEach(x=>{if(!have.has(sbJ(x)))s[f].push(x)});
+    s[f].sort((a,b)=>String(a.ts||"").localeCompare(String(b.ts||"")))});
+  Object.keys(Object.assign({},srv,base)).forEach(f=>{if(["id","crates","issues","log"].includes(f))return;
+    if(sbJ(s[f])===sbJ(base[f])&&sbJ(srv[f])!==sbJ(s[f])){if(srv[f]===undefined)delete s[f];else s[f]=JSON.parse(JSON.stringify(srv[f]))}});
+  return data.updated_at;
+}
+function sbRenumberShip(s){const old=s.id;
+  const n=Math.max(db.seq.ship||0,...db.shipments.map(x=>parseInt(String(x.id).replace(/^\D+/,""))||0))+1;db.seq.ship=n;
+  const id="SH-"+String(n).padStart(3,"0");s.id=id;(s.crates||[]).forEach(c=>{c.id=c.id.replace(old,id)});
+  if(ui.shSel===old)ui.shSel=id;delete sbSnap.ship[old]}
+async function sbSaveShip(s){
+  for(let tries=0;;tries++){
+    const ver=await sbMergeShip(s);
+    const p=by(db.projects,s.project);if(!p||!p.sbId)throw new Error("project of shipment "+s.id+" is not in Supabase");
+    const drv=by(db.operators,s.driver);
+    const row={company_id:sbCompany,code:s.id,project_id:p.sbId,site:s.site||null,site_time:sbTs(s.siteTime),truck:s.truck||null,
+      driver_operator_id:drv&&drv.sbId||null,driver_phone:s.driverPhone||null,status:SB_SH_ST.includes(s.status)?s.status:"Planned",
+      extra_trip:!!s.extraTrip,extra_trip_needed:!!s.extraTripNeeded,departed_at:sbTs(s.departedAt),delivered_at:sbTs(s.deliveredAt),
+      props:{sh:sbClean(s)},updated_at:new Date().toISOString()};
+    if(!s.sbId){row.created_by=sbUid;const {data,error}=await SB.from("shipment").insert(row).select("id").single();
+      if(error){if(/duplicate|unique/i.test(error.message)&&tries<10){sbRenumberShip(s);continue}throw error}
+      s.sbId=data.id;delete s.sbPending}
+    else{let q=SB.from("shipment").update(row).eq("id",s.sbId);if(ver)q=q.eq("updated_at",ver);
+      const {data:upd,error}=await q.select("id");if(error)throw error;
+      if(ver&&(!upd||!upd.length)){if(tries<5)continue;throw new Error("another device kept changing shipment "+s.id+", try again")}}
+    break}
+  /* reporting tables: crates + contents, site issues, history, proof of delivery */
+  const sid=s.sbId;
+  for(const c of s.crates||[])for(const i of c.items||[])if(i.wo&&sbWoQ[i.wo])await sbWoQ[i.wo];
+  await sbOk(SB.from("crate").delete().eq("shipment_id",sid));
+  const C=(s.crates||[]).map(c=>({shipment_id:sid,code:c.id,install_seq:c.installSeq!=null?+c.installSeq:null,loaded:!!c.loaded,delivered:!!c.delivered,damaged:!!c.damaged}));
+  if(C.length){const {data:cr,error}=await SB.from("crate").insert(C).select("id,code");if(error)throw error;
+    const cid={};cr.forEach(x=>cid[x.code]=x.id);const I=[];
+    (s.crates||[]).forEach(c=>(c.items||[]).forEach(i=>{const a=sbArtU(i.article);if(a&&+i.qty>0)I.push({crate_id:cid[c.id],article_id:a,work_order_id:i.wo?sbWoU(i.wo):null,qty:+i.qty})}));
+    if(I.length)await sbOk(SB.from("crate_item").insert(I))}
+  await sbOk(SB.from("site_issue").delete().eq("shipment_id",sid));
+  const IS=(s.issues||[]).map(x=>{const m=/^(\S+-C\d+) · /.exec(x.text||"");
+    return {shipment_id:sid,type:SB_ISSUE.includes(x.type)?x.type:"Other",text:x.text||null,crate_code:m?m[1]:null,created_at:sbTs(x.ts)||new Date().toISOString()}});
+  if(IS.length)await sbOk(SB.from("site_issue").insert(IS));
+  await sbOk(SB.from("shipment_log").delete().eq("shipment_id",sid));
+  const LG=(s.log||[]).map(x=>({shipment_id:sid,at:sbTs(x.ts)||new Date().toISOString(),text:x.txt||"",by_name:x.by||null}));
+  if(LG.length)await sbOk(SB.from("shipment_log").insert(LG));
+  if(s.pod&&s.pod.name)await sbOk(SB.from("proof_of_delivery").upsert({shipment_id:sid,receiver_name:s.pod.name,note:s.pod.note||null,delivered_at:sbTs(s.pod.ts)||new Date().toISOString()}));
+  else await sbOk(SB.from("proof_of_delivery").delete().eq("shipment_id",sid));
+  sbShipBase[s.id]=JSON.parse(JSON.stringify(sbClean(s)));sbSnap.ship[s.id]=sbShipKey(s);
+}
+function sbQueueShip(s){sbSnap.ship[s.id]=sbShipKey(s);if(!s.sbId)s.sbPending=true;
+  sbShipQ.set(s,(sbShipQ.get(s)||Promise.resolve()).then(()=>sbSaveShip(s)).then(()=>{_sbPersist()})
+    .catch(e=>{console.error(e);delete sbSnap.ship[s.id];toast("Shipment "+s.id+" not saved to Supabase: "+(e.message||e))}))}
+
+/* push changes made in the MES back to Supabase: task status, station state, work orders, terminal records, shipments */
 const _sbPersist=persist;
 persist=function(){const r=_sbPersist();if(!me||sbBooting)return r;
   (db.tasks||[]).filter(k=>k.sbId&&sbSnap.task[k.sbId]!==sbTaskKey(k)).forEach(k=>{sbSnap.task[k.sbId]=sbTaskKey(k);
@@ -269,6 +356,7 @@ persist=function(){const r=_sbPersist();if(!me||sbBooting)return r;
     SB.from("machine").update({state:["run","stopped","out"].includes(x.state)?x.state:"run",stop_reason:x.reason||null}).eq("id",x.sbId)
       .then(({error})=>{if(error){delete sbSnap.mach[x.id];toast("Could not save station state to Supabase")}})});
   (db.workorders||[]).filter(w=>sbSnap.wo[w.id]!==sbWoKey(w)).forEach(sbQueueWO);
+  sbSnap.ship=sbSnap.ship||{};(db.shipments||[]).filter(x=>sbSnap.ship[x.id]!==sbShipKey(x)).forEach(sbQueueShip);
   Object.keys(SB_LOGS).forEach(coll=>{sbSnap[coll]=sbSnap[coll]||{};(db[coll]||[]).filter(x=>sbSnap[coll][x.id]!==sbLogKey(x)).forEach(x=>sbQueueLog(coll,x))});
   return r};
 
@@ -295,9 +383,10 @@ async function sbBoot(){
     const s4=await sbLoadProducts();
     const s5=await sbLoadWOs();
     const s6=await sbLoadLogs();
+    const s7=await sbLoadShipments();
     u.ws=u.wsIds.map(id=>sbMap.ws[id]).filter(Boolean);u.op=u.opId?(sbMap.op[u.opId]||""):"";
     sbLastSync=new Date();
-    db.syncLog=db.syncLog||[];db.syncLog.unshift({at:sbLastSync.toISOString(),dir:"in",msg:`Supabase: ${s3.w} workshops, ${s3.m} stations, ${s3.a} assets, ${s3.o} team leaders, ${s3.raw} raw materials · ${s2.p} project(s), ${s2.t} tasks, ${s2.d} dependencies · ${s4.n} products, ${s5.n} work orders · ${s6.executions} runs, ${s6.stops} stops, ${s6.consumption} material records`});
+    db.syncLog=db.syncLog||[];db.syncLog.unshift({at:sbLastSync.toISOString(),dir:"in",msg:`Supabase: ${s3.w} workshops, ${s3.m} stations, ${s3.a} assets, ${s3.o} team leaders, ${s3.raw} raw materials · ${s2.p} project(s), ${s2.t} tasks, ${s2.d} dependencies · ${s4.n} products, ${s5.n} work orders · ${s6.executions} runs, ${s6.stops} stops, ${s6.consumption} material records · ${s7.n} shipments`});
     _sbPersist();
     me=u;sbBooting=false;if(!myViews().includes(view))view=myViews()[0];render();
   }catch(e){sbBooting=false;console.error(e);$("#main").innerHTML=`<div class="card" style="max-width:520px;margin:40px auto"><h2>Could not load data from Supabase</h2><p class="muted">${esc(e.message||String(e))}</p><button class="btn" onclick="location.reload()">Try again</button></div>`}

@@ -1,5 +1,5 @@
 # Builds the test MES (mes.html) from the latest MES Demo artifact.
-# Parts: 1 login · 2 projects/tasks · 3 master data (workshops, stations, assets, team leaders, raw materials, catalogs, stop reasons)
+# Parts: 1 login · 2 projects/tasks · 3 master data · 4 work orders · 5 operator terminal · 6 dispatch (Logistics)
 import json,sys
 SRC=sys.argv[1]; OUT=sys.argv[2]
 src=open(SRC,encoding='utf-8').read()
@@ -19,6 +19,9 @@ k='window.RAW_IMPORT='
 i=src.index(k)+len(k)
 obj,end=json.JSONDecoder().raw_decode(src,i)
 src=src[:i]+'null'+src[end:]
+
+# Dispatch (Logistics) on
+if 'const HIDE_DISPATCH=true;' in src: src=src.replace('const HIDE_DISPATCH=true;','const HIDE_DISPATCH=false;',1)
 
 # no browser-stored demo login
 rep('let me=null;try{const u=localStorage.getItem(KEY+"_user");me=u?by(db.users,u)||null:null}catch(e){}','let me=null;')
