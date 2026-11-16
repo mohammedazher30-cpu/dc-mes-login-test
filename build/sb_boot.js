@@ -326,7 +326,8 @@ async function sbSaveShip(s){
   const sid=s.sbId;
   for(const c of s.crates||[])for(const i of c.items||[])if(i.wo&&sbWoQ[i.wo])await sbWoQ[i.wo];
   await sbOk(SB.from("crate").delete().eq("shipment_id",sid));
-  const C=(s.crates||[]).map(c=>({shipment_id:sid,code:c.id,install_seq:c.installSeq!=null?+c.installSeq:null,loaded:!!c.loaded,delivered:!!c.delivered,damaged:!!c.damaged}));
+  const C=(s.crates||[]).map(c=>({shipment_id:sid,code:c.id,install_seq:c.installSeq!=null?+c.installSeq:null,loaded:!!c.loaded,delivered:!!c.delivered,damaged:!!c.damaged,
+    packed_by:c.by||null,packed_at:sbTs(c.at),sealed:!!c.sealed,checked_by:c.chkBy||null,checked_at:sbTs(c.chkAt)}));
   if(C.length){const {data:cr,error}=await SB.from("crate").insert(C).select("id,code");if(error)throw error;
     const cid={};cr.forEach(x=>cid[x.code]=x.id);const I=[];
     (s.crates||[]).forEach(c=>(c.items||[]).forEach(i=>{const a=sbArtU(i.article);if(a&&+i.qty>0)I.push({crate_id:cid[c.id],article_id:a,work_order_id:i.wo?sbWoU(i.wo):null,qty:+i.qty})}));
