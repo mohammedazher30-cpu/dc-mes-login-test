@@ -46,7 +46,7 @@ async function sbLoadMaster(){
     SB.from("asset").select("id,code,name,model,description,status,photo_url,workshop:workshop_id(code),station:station_id(code)").order("code"),
     SB.from("operator").select("id,code,name,skills,workshop:workshop_id(code),machine:machine_id(code)"),
     SB.from("raw_catalog").select("code,name").order("code"),
-    SB.from("stop_reason").select("category,name_en,name_ar,sort").order("sort"),
+    SB.from("stop_reason").select("id,category,name_en,name_ar,sort").order("sort"),
     sbAll(()=>SB.from("article").select("id,code,name,unit,stock,min_stock,max_stock,item_group,family,source,catalog:catalog_id(code)").eq("type","raw material").order("code"))]);
   const err=[w,m,a,o,c,r].map(x=>x.error).find(Boolean);if(err)throw err;
   /* workshops: keep the demo's order, take names from Supabase */
@@ -72,7 +72,7 @@ async function sbLoadMaster(){
     catalog:x.catalog&&x.catalog.code,family:"raw material",group:x.item_group||"",src:"zinv",sbId:x.id})});
   db.articles=db.articles.filter(x=>x.type!=="raw").concat(raws);
   /* stop reasons */
-  if(r.data.length){const g={};r.data.forEach(x=>{(g[x.category]=g[x.category]||[]).push(x.name_en);if(x.name_ar&&T.ar)T.ar[x.name_en]=x.name_ar});
+  if(r.data.length){const g={};r.data.forEach(x=>{sbReason[x.name_en]=x.id;(g[x.category]=g[x.category]||[]).push(x.name_en);if(x.name_ar&&T.ar)T.ar[x.name_en]=x.name_ar});
     REASON_GROUPS.length=0;["Planned","Equipment","Material","People","Process","Quality","Flow"].forEach(k=>{if(g[k])REASON_GROUPS.push([k,g[k]])});
     REASONS.length=0;REASON_GROUPS.forEach(x=>x[1].forEach(n=>REASONS.push(n)))}
   return {w:w.data.length,m:m.data.length,a:a.data.length,o:o.data.length,raw:raws.length};
@@ -141,10 +141,13 @@ async function sbLoadWOs(){
   const pending=(db.workorders||[]).filter(w=>w.sbPending&&!ids.has(w.id));
   db.workorders=L.concat(pending);
   db.tasks.forEach(k=>{k.wos=db.workorders.filter(w=>w.task===k.id).map(w=>w.id)});
-  sbSnap.wo={};L.forEach(w=>sbSnap.wo[w.id]=sbWoKey(w));
+  sbSnap.wo={};L.forEach(w=>{sbSnap.wo[w.id]=sbWoKey(w);sbBase[w.id]=JSON.parse(JSON.stringify(sbClean(w)))});
   return {n:L.length};
 }
 async function sbSaveWO(w){
+  const dl=sbDelta(w);
+  for(let tries=0;;tries++){
+  const ver=await sbMergeWO(w,dl);
   const art=await sbEnsureArticle(w.article);if(!art)throw new Error("Product "+w.article+" is not in Supabase");
   const p=by(db.projects,w.project),k=w.task&&by(db.tasks,w.task);
   const {sbId,sbPending,...full}=w;
@@ -156,7 +159,10 @@ async function sbSaveWO(w){
   if(!w.sbId){row.created_by=sbUid;const {data,error}=await SB.from("work_order").insert(row).select("id").single();
     if(error)throw /duplicate|unique/i.test(error.message)?new Error("Work order number "+w.id+" is already used by another user. Refresh and create it again."):error;
     w.sbId=data.id;delete w.sbPending}
-  else{const {error}=await SB.from("work_order").update(row).eq("id",w.sbId);if(error)throw error}
+  else{let q=SB.from("work_order").update(row).eq("id",w.sbId);if(ver)q=q.eq("updated_at",ver);
+    const {data:upd,error}=await q.select("id");if(error)throw error;
+    if(ver&&(!upd||!upd.length)){if(tries<5)continue;throw new Error("another device kept changing work order "+w.id+", try again")}}
+  break}
   /* route steps */
   const seen=new Set(),O=(w.ops||[]).filter(o=>{const s=+o.seq;if(!Number.isFinite(s)||seen.has(s))return false;seen.add(s);return true}).map(o=>({work_order_id:w.sbId,seq:+o.seq,operation:o.op||null,
     workshop_id:sbWsU(o.ws),machine_id:sbMachU(o.machine),is_logistics:!!o.tail,good_qty:+o.done||0,scrap_qty:+o.scrap||0,rework_qty:+o.rw||0}));
@@ -170,12 +176,90 @@ async function sbSaveWO(w){
   if(MR.length){const {error}=await SB.from("work_order_material").upsert(MR,{onConflict:"work_order_id,article_id"});if(error)throw error;
     const {error:e3}=await SB.from("work_order_material").delete().eq("work_order_id",w.sbId).not("article_id","in","("+MR.map(m=>m.article_id).join(",")+")");if(e3)console.warn(e3)}
   else{await SB.from("work_order_material").delete().eq("work_order_id",w.sbId)}
+  sbBase[w.id]=JSON.parse(JSON.stringify(sbClean(w)));sbSnap.wo[w.id]=sbWoKey(w);
 }
 function sbQueueWO(w){const key=sbWoKey(w);sbSnap.wo[w.id]=key;if(!w.sbId)w.sbPending=true;
   sbWoQ[w.id]=(sbWoQ[w.id]||Promise.resolve()).then(()=>sbSaveWO(w)).then(()=>{_sbPersist()})
     .catch(e=>{console.error(e);delete sbSnap.wo[w.id];toast("Work order "+w.id+" not saved to Supabase: "+(e.message||e))})}
 
-/* push changes made in the MES back to Supabase: task status, station state, work orders */
+
+/* ---- part 5: operator terminal records (runs, stops, material use, scrap/rework log) ---- */
+let sbReason={},sbLogQ={},sbBase={};
+const sbDays=60;
+const sbWoU=code=>{const w=by(db.workorders,code);return w&&w.sbId||null};
+const sbWoC=u=>{const w=(db.workorders||[]).find(x=>x.sbId===u);return w?w.id:""};
+const sbOpU=id=>{const o=(db.operators||[]).find(x=>x.id===id);return o&&o.sbId||null};
+const sbOpL=u=>(u&&sbMap.op[u])||"";
+const sbArtU=id=>{const a=by(db.articles,id);return a&&a.sbId||null};
+const sbArtC=u=>{const a=db.articles.find(x=>x.sbId===u);return a?a.id:""};
+const sbMachC=u=>(u&&sbMap.mach[u])||"";
+const sbClean=(o,k)=>{const {sbId,sbPending,...r}=o;return r};
+const SB_LOGS={
+  executions:{t:"execution",key:"ex",need:x=>sbWoU(x.wo),
+    row:x=>{const w=by(db.workorders,x.wo),o=w&&w.ops&&w.ops[exOp(x)];return {code:x.id,work_order_id:sbWoU(x.wo),op_seq:o?+o.seq:null,machine_id:sbMachU(x.machine),operator_id:sbOpU(x.operator),
+      started_at:x.start,ended_at:x.end||null,good_qty:+x.good||0,scrap_qty:+x.scrap||0,rework_qty:+x.rw||0,started_by:x.by||(by(db.operators,x.operator)||{}).name||null}},
+    back:(r,b)=>{const wc=sbWoC(r.work_order_id),w=by(db.workorders,wc);let op=b.op;if(w&&r.op_seq!=null){const i=(w.ops||[]).findIndex(o=>+o.seq===r.op_seq);if(i>=0)op=i}
+      return Object.assign(b,{id:r.code||b.id,wo:wc,op,machine:sbMachC(r.machine_id)||b.machine,operator:sbOpL(r.operator_id)||b.operator,start:r.started_at,end:r.ended_at,good:+r.good_qty||0,scrap:+r.scrap_qty||0,rw:+r.rework_qty||0})},
+    sel:"id,code,work_order_id,op_seq,machine_id,operator_id,started_at,ended_at,good_qty,scrap_qty,rework_qty,props",since:"started_at",open:"ended_at",seq:"exe"},
+  stops:{t:"stop_event",key:"st",need:x=>sbMachU(x.machine),
+    row:x=>({code:x.id,machine_id:sbMachU(x.machine),started_at:x.start,ended_at:x.end||null,reason:x.reason||null,reason_id:sbReason[x.reason]||null,stopped_by:x.by||null,
+      work_order_id:x.wo?sbWoU(x.wo):null,qualified_at:x.reason&&x.qAt?x.qAt:null}),
+    back:(r,b)=>Object.assign(b,{id:r.code||b.id,machine:sbMachC(r.machine_id)||b.machine,start:r.started_at,end:r.ended_at,reason:r.reason||"",by:r.stopped_by||b.by||"",wo:r.work_order_id?sbWoC(r.work_order_id):(b.wo||"")}),
+    sel:"id,code,machine_id,started_at,ended_at,reason,stopped_by,work_order_id,props",since:"started_at",open:"ended_at",seq:"stop"},
+  consumption:{t:"material_issue",key:"mi",need:x=>sbWoU(x.wo)&&sbArtU(x.article),
+    row:x=>({code:x.id,work_order_id:sbWoU(x.wo),article_id:sbArtU(x.article),qty:+x.qty||0,batch_no:x.batch||null,issued_at:x.ts,issued_by_name:x.by||null,zoho_sent:!!x.zsent,kind:x.kind||"use"}),
+    back:(r,b)=>Object.assign(b,{id:r.code||b.id,wo:sbWoC(r.work_order_id),article:sbArtC(r.article_id)||b.article,qty:+r.qty,batch:r.batch_no||"",ts:r.issued_at,zsent:!!r.zoho_sent,kind:r.kind||"use"}),
+    sel:"id,code,work_order_id,article_id,qty,batch_no,issued_at,zoho_sent,kind,props",since:"issued_at",seq:"cons"},
+  scrapLog:{t:"scrap_log",key:"sc",need:x=>sbWoU(x.wo),
+    row:x=>({code:x.id,at:x.at,work_order_id:sbWoU(x.wo),op_seq:x.seq!=null?+x.seq:null,machine_id:sbMachU(x.op),by_name:x.by||null,qty:+x.qty||0,action:x.action||null,reason:x.reason||null,note:x.note||null,materials:x.mat||[]}),
+    back:(r,b)=>Object.assign(b,{id:r.code||b.id,at:r.at,wo:sbWoC(r.work_order_id),seq:r.op_seq,qty:+r.qty,action:r.action,reason:r.reason||"",note:r.note||"",mat:r.materials||[],by:r.by_name||b.by||""}),
+    sel:"id,code,at,work_order_id,op_seq,machine_id,by_name,qty,action,reason,note,materials,props",since:"at",seq:"scrap"}
+};
+const sbLogKey=x=>JSON.stringify(sbClean(x));
+async function sbLoadLogs(){
+  const since=new Date(Date.now()-sbDays*864e5).toISOString(),out={};
+  for(const [coll,c] of Object.entries(SB_LOGS)){
+    const rows=await sbAll(()=>{let q=SB.from(c.t).select(c.sel);return c.open?q.or(`${c.since}.gte.${since},${c.open}.is.null`):q.gte(c.since,since)});
+    const L=rows.map(r=>{const b=Object.assign({},(r.props&&r.props[c.key])||{});const x=c.back(r,b);x.sbId=r.id;return x}).filter(x=>coll==="stops"||x.wo);
+    const seen=new Set();L.forEach(x=>{if(seen.has(x.id))x.id=x.id+"·"+x.sbId.slice(0,4);seen.add(x.id)});
+    const pend=(db[coll]||[]).filter(x=>x.sbPending&&!L.some(y=>y.id===x.id));
+    db[coll]=L.concat(pend);
+    const mx=L.reduce((m,x)=>Math.max(m,parseInt(String(x.id).replace(/^\D+/,""))||0),0);db.seq[c.seq]=Math.max(db.seq[c.seq]||0,mx);
+    sbSnap[coll]={};L.forEach(x=>sbSnap[coll][x.id]=sbLogKey(x));out[coll]=L.length}
+  return out;
+}
+async function sbSaveLog(coll,x){
+  const c=SB_LOGS[coll];
+  if(x.wo&&sbWoQ[x.wo])await sbWoQ[x.wo];
+  if(!c.need(x))throw new Error("waiting for "+(x.wo||x.machine));
+  const row=c.row(x);row.props={[c.key]:sbClean(x)};
+  if(!x.sbId){row.created_by=sbUid;if(c.t==="material_issue"){delete row.created_by;row.issued_by=sbUid}
+    const {data,error}=await SB.from(c.t).insert(row).select("id").single();if(error)throw error;x.sbId=data.id;delete x.sbPending}
+  else{const {error}=await SB.from(c.t).update(row).eq("id",x.sbId);if(error)throw error}
+}
+function sbQueueLog(coll,x){const k=coll+"|"+x.id;sbSnap[coll][x.id]=sbLogKey(x);if(!x.sbId)x.sbPending=true;
+  sbLogQ[k]=(sbLogQ[k]||Promise.resolve()).then(()=>sbSaveLog(coll,x)).then(()=>{_sbPersist()})
+    .catch(e=>{console.warn(e);delete sbSnap[coll][x.id];if(!/^waiting/.test(e.message||""))toast("Not saved to Supabase: "+(e.message||e))})}
+/* two terminals on the same work order: add this device's progress to the latest server figures */
+const SB_NUM=["done","scrap","rw","rs"];
+async function sbMergeWO(w,dl){
+  /* dl = this device's own changes since the last save; added on top of the latest server figures */
+  if(!w.sbId)return null;
+  const {data,error}=await SB.from("work_order").select("props,status,closed_short,cancel_info,updated_at").eq("id",w.sbId).maybeSingle();
+  if(error||!data)return null;
+  const srv=data.props&&data.props.wo;
+  if(srv&&dl)(w.ops||[]).forEach(o=>{const so=(srv.ops||[]).find(x=>+x.seq===+o.seq),d=dl[o.seq];if(!so||!d)return;
+    SB_NUM.forEach(f=>{if(d[f]==null)return;const v=Math.max(0,+((+so[f]||0)+d[f]).toFixed(4));if(v||o[f]!=null)o[f]=v})});
+  if(data.status==="Cancelled"&&w.status!=="Cancelled"){w.status="Cancelled";if(data.cancel_info)w.cancel=data.cancel_info}
+  if(data.closed_short&&!w.closedShort)w.closedShort=true;
+  try{syncWO(w,true)}catch(e){}
+  return data.updated_at;
+}
+function sbDelta(w){const base=sbBase[w.id];if(!base)return null;const dl={};
+  (w.ops||[]).forEach(o=>{const bo=(base.ops||[]).find(x=>+x.seq===+o.seq);if(!bo)return;const d={};SB_NUM.forEach(f=>{const x=(+o[f]||0)-(+bo[f]||0);if(x)d[f]=x});if(Object.keys(d).length)dl[o.seq]=d});
+  return dl}
+
+/* push changes made in the MES back to Supabase: task status, station state, work orders, terminal records */
 const _sbPersist=persist;
 persist=function(){const r=_sbPersist();if(!me||sbBooting)return r;
   (db.tasks||[]).filter(k=>k.sbId&&sbSnap.task[k.sbId]!==sbTaskKey(k)).forEach(k=>{sbSnap.task[k.sbId]=sbTaskKey(k);
@@ -185,6 +269,7 @@ persist=function(){const r=_sbPersist();if(!me||sbBooting)return r;
     SB.from("machine").update({state:["run","stopped","out"].includes(x.state)?x.state:"run",stop_reason:x.reason||null}).eq("id",x.sbId)
       .then(({error})=>{if(error){delete sbSnap.mach[x.id];toast("Could not save station state to Supabase")}})});
   (db.workorders||[]).filter(w=>sbSnap.wo[w.id]!==sbWoKey(w)).forEach(sbQueueWO);
+  Object.keys(SB_LOGS).forEach(coll=>{sbSnap[coll]=sbSnap[coll]||{};(db[coll]||[]).filter(x=>sbSnap[coll][x.id]!==sbLogKey(x)).forEach(x=>sbQueueLog(coll,x))});
   return r};
 
 async function sbProfileToMe(){
@@ -209,9 +294,10 @@ async function sbBoot(){
     sbUid=data.session.user.id;
     const s4=await sbLoadProducts();
     const s5=await sbLoadWOs();
+    const s6=await sbLoadLogs();
     u.ws=u.wsIds.map(id=>sbMap.ws[id]).filter(Boolean);u.op=u.opId?(sbMap.op[u.opId]||""):"";
     sbLastSync=new Date();
-    db.syncLog=db.syncLog||[];db.syncLog.unshift({at:sbLastSync.toISOString(),dir:"in",msg:`Supabase: ${s3.w} workshops, ${s3.m} stations, ${s3.a} assets, ${s3.o} team leaders, ${s3.raw} raw materials · ${s2.p} project(s), ${s2.t} tasks, ${s2.d} dependencies · ${s4.n} products, ${s5.n} work orders`});
+    db.syncLog=db.syncLog||[];db.syncLog.unshift({at:sbLastSync.toISOString(),dir:"in",msg:`Supabase: ${s3.w} workshops, ${s3.m} stations, ${s3.a} assets, ${s3.o} team leaders, ${s3.raw} raw materials · ${s2.p} project(s), ${s2.t} tasks, ${s2.d} dependencies · ${s4.n} products, ${s5.n} work orders · ${s6.executions} runs, ${s6.stops} stops, ${s6.consumption} material records`});
     _sbPersist();
     me=u;sbBooting=false;if(!myViews().includes(view))view=myViews()[0];render();
   }catch(e){sbBooting=false;console.error(e);$("#main").innerHTML=`<div class="card" style="max-width:520px;margin:40px auto"><h2>Could not load data from Supabase</h2><p class="muted">${esc(e.message||String(e))}</p><button class="btn" onclick="location.reload()">Try again</button></div>`}
