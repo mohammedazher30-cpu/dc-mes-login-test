@@ -2110,7 +2110,7 @@ try{const l=localStorage.getItem(KEY+"_lang");if(l==="ar"){lang="ar";document.do
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeModal()});
 /* ================= Supabase connection (test MES) ================= */
 const SB=supabase.createClient("https://iccutmlawnnldkqxstmw.supabase.co","sb_publishable_Dmq8eav0yxwH5N64kSjYEw_aw8vxTTs");
-const SB_ROLE={admin:"admin",exec:"exec",pm:"pm",manager:"manager",supervisor:"supervisor",storekeeper:"storekeeper",team_leader:"operator"};
+const SB_ROLE={admin:"admin",exec:"exec",pm:"pm",manager:"manager",supervisor:"supervisor",storekeeper:"storekeeper",team_leader:"supervisor"};
 let sbSnap={task:{},mach:{},wo:{}},sbBooting=false,sbLastSync=null,sbMap={ws:{},mach:{},op:{},machCode:{}};
 window.ZOHO_IMPORT=[]; /* projects and tasks come from Supabase */
 const sbTaskKey=k=>JSON.stringify([k.status,k.doneAt||null,k.doneBy||"",k.zohoPct||0]);
@@ -2479,7 +2479,7 @@ async function sbProfileToMe(){
   if(!data||!data.length)return false;
   const p=data[0];
   const {data:row}=await SB.from("app_user").select("workshop_ids,operator_id").eq("id",p.id).maybeSingle();
-  return {id:p.id,name:p.full_name,email:p.email,role:SB_ROLE[p.role]||"operator",wsIds:(row&&row.workshop_ids)||[],opId:row&&row.operator_id,ws:[],op:"",sb:true};
+  return {id:p.id,name:p.full_name,email:p.email,role:SB_ROLE[p.role]||"operator",sbRole:p.role,wsIds:(row&&row.workshop_ids)||[],opId:row&&row.operator_id,ws:[],op:"",sb:true};
 }
 async function sbBoot(){
   if(sbBooting)return;sbBooting=true;
@@ -2501,7 +2501,7 @@ async function sbBoot(){
     sbLastSync=new Date();
     db.syncLog=db.syncLog||[];db.syncLog.unshift({at:sbLastSync.toISOString(),dir:"in",msg:`Supabase: ${s3.w} workshops, ${s3.m} stations, ${s3.a} assets, ${s3.o} team leaders, ${s3.raw} raw materials · ${s2.p} project(s), ${s2.t} tasks, ${s2.d} dependencies · ${s4.n} products, ${s5.n} work orders · ${s6.executions} runs, ${s6.stops} stops, ${s6.consumption} material records · ${s7.n} shipments`});
     _sbPersist();
-    me=u;sbBooting=false;if(!myViews().includes(view))view=myViews()[0];render();
+    me=u;sbBooting=false;if(!myViews().includes(view))view=myViews()[0];render();sbIdleReset();
   }catch(e){sbBooting=false;console.error(e);$("#main").innerHTML=`<div class="card" style="max-width:520px;margin:40px auto"><h2>Could not load data from Supabase</h2><p class="muted">${esc(e.message||String(e))}</p><button class="btn" onclick="location.reload()">Try again</button></div>`}
 }
 loginScreen=function(){
@@ -2526,6 +2526,99 @@ loginScreen=function(){
   $("#langBtn2").onclick=()=>{$("#langBtn").click()};
 };
 logout=async function(){if(!confirm("Log out of the MES?"))return;me=null;ui.tWarn=null;try{await SB.auth.signOut({scope:"local"})}catch(e){}render()};
+
+/* ---- part 7: team leader tablet login (name + PIN on registered tablets) ---- */
+const SB_TAB="dcmes_tablet",SB_IDLE_MIN=30;
+const sbTabKey=()=>{try{return localStorage.getItem(SB_TAB)||""}catch(e){return""}};
+const sbTabSet=k=>{try{k?localStorage.setItem(SB_TAB,k):localStorage.removeItem(SB_TAB)}catch(e){}};
+async function sbFn(name,body){const {data,error}=await SB.functions.invoke(name,{body});if(error)return {ok:false,error:"Could not reach the server. Check the connection."};return data||{ok:false,error:"No answer from the server"}}
+const _sbEmailLogin=loginScreen;
+loginScreen=function(){
+  const key=sbTabKey();
+  if(!key||ui.sbEmailMode){_sbEmailLogin();
+    if(key&&$("#sbStep1"))$("#sbStep1").insertAdjacentHTML("afterend",`<div style="text-align:center;margin-top:10px"><button class="btn sec sm" id="sbBackPin">← Team leader sign-in</button></div>`);
+    const bb=$("#sbBackPin");if(bb)bb.onclick=()=>{ui.sbEmailMode=false;loginScreen()};return}
+  document.body.classList.add("locked");
+  const msg=ui.sbMsg||"";ui.sbMsg="";
+  $("#main").innerHTML=`<div class="login"><div class="login-card" style="max-width:560px">
+    <div class="login-brand">${document.querySelector(".logo")?document.querySelector(".logo").innerHTML:""}<h1 style="margin:6px 0 2px">${t("brand")}</h1><div class="muted" id="sbTabName">Loading…</div></div>
+    <div id="sbPeople" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:12px 0"></div>
+    <div id="sbPin" style="display:none;text-align:center"></div>
+    <div class="note" id="sbMsg" style="text-align:center;margin-top:10px;${msg?"color:var(--bad)":""}">${esc(msg)}</div>
+    <div class="row" style="justify-content:center;margin-top:14px;gap:8px"><button class="btn sec sm" id="sbOffice">Office login (email)</button><button class="btn sec sm" id="langBtn2">${t("lang")}</button></div>
+  </div></div>`;
+  $("#sbOffice").onclick=()=>{ui.sbEmailMode=true;loginScreen()};$("#langBtn2").onclick=()=>{$("#langBtn").click()};
+  const err=m=>{$("#sbMsg").textContent=m;$("#sbMsg").style.color="var(--bad)"};
+  sbFn("tablet-login",{action:"list",device_key:key}).then(r=>{
+    if(!r.ok){$("#sbTabName").textContent="Tablet not active";err(r.error);if(r.device===false)sbTabSet("");return}
+    $("#sbTabName").textContent="📟 "+r.device+" · tap your name";
+    if(!r.people.length){$("#sbPeople").innerHTML=`<div class="muted" style="grid-column:1/-1;text-align:center">No team leader has a PIN for this tablet yet. Ask your admin.</div>`;return}
+    $("#sbPeople").innerHTML=r.people.map(p=>`<button class="btn sec big" data-pp="${p.id}" style="white-space:normal;line-height:1.2;padding:12px 8px"><b>${esc(p.name)}</b><br><span class="muted" style="font-size:11px">${esc(p.ws)}</span></button>`).join("");
+    document.querySelectorAll("[data-pp]").forEach(b=>b.onclick=()=>pinPad(r.people.find(p=>p.id===b.dataset.pp)));
+  });
+  function pinPad(p){let pin="";$("#sbPeople").style.display="none";const box=$("#sbPin");box.style.display="";$("#sbMsg").textContent="";
+    const draw=()=>{box.innerHTML=`<div style="font-size:18px;margin-bottom:6px"><b>${esc(p.name)}</b></div>
+      <div style="font-size:30px;letter-spacing:14px;margin:6px 0 12px">${"●".repeat(pin.length)}${"○".repeat(4-pin.length)}</div>
+      <div style="display:grid;grid-template-columns:repeat(3,72px);gap:8px;justify-content:center">${[1,2,3,4,5,6,7,8,9,"←",0,"✓"].map(k=>`<button class="btn ${k==="✓"?"":"sec"} big" data-k="${k}" style="height:60px;font-size:22px">${k}</button>`).join("")}</div>
+      <div style="margin-top:12px"><button class="btn sec sm" id="sbNotMe">Not ${esc(p.name.split(" ")[0])}? Back</button></div>`;
+      box.querySelectorAll("[data-k]").forEach(b=>b.onclick=()=>key_(b.dataset.k));$("#sbNotMe").onclick=()=>loginScreen()};
+    const go=async()=>{if(pin.length!==4)return;box.querySelectorAll("button").forEach(b=>b.disabled=true);$("#sbMsg").style.color="";$("#sbMsg").textContent="Signing in…";
+      const r=await sbFn("tablet-login",{action:"login",device_key:key,operator_id:p.id,pin});
+      if(!r.ok){pin="";draw();err(r.error);return}
+      const {error}=await SB.auth.verifyOtp({token_hash:r.token_hash,type:"magiclink"});
+      if(error){pin="";draw();err("Could not sign in: "+error.message);return}
+      $("#sbMsg").textContent="Welcome "+r.name;};
+    const key_=k=>{if(k==="←")pin=pin.slice(0,-1);else if(k==="✓"){go();return}else if(pin.length<4)pin+=k;draw();if(pin.length===4)go()};
+    draw();
+    document.onkeydown=e=>{if(!$("#sbPin")||$("#sbPin").style.display==="none")return;if(/^\d$/.test(e.key))key_(e.key);else if(e.key==="Backspace")key_("←");else if(e.key==="Enter")key_("✓")};}
+};
+/* tablet sessions sign out after inactivity */
+let sbIdleT=null;
+const sbIsTablet=()=>!!(me&&me.sb&&me.sbRole==="team_leader");
+function sbIdleReset(){if(!sbIsTablet())return;clearTimeout(sbIdleT);sbIdleT=setTimeout(async()=>{if(!sbIsTablet())return;me=null;ui.sbMsg="Signed out after "+SB_IDLE_MIN+" min without use.";try{await SB.auth.signOut({scope:"local"})}catch(e){}render()},SB_IDLE_MIN*60000)}
+["pointerdown","keydown","touchstart"].forEach(ev=>document.addEventListener(ev,sbIdleReset,{passive:true}));
+const _sbLogout7=logout;
+logout=async function(){if(sbIsTablet()){me=null;clearTimeout(sbIdleT);try{await SB.auth.signOut({scope:"local"})}catch(e){}render();return}return _sbLogout7()};
+/* Admin: tablets and team leader PINs, shown on the Users screen */
+const _sbVUsers=typeof vUsers==="function"?vUsers:null;
+if(_sbVUsers)vUsers=function(){_sbVUsers();if(!me||me.role!=="admin")return;
+  $("#main").insertAdjacentHTML("beforeend",`<div id="sbTabAdmin"><div class="head" style="margin-top:22px"><h1 style="font-size:20px">Tablets & team leader PINs</h1></div><div class="card"><div class="muted">Loading…</div></div></div>`);
+  sbTabAdmin()};
+async function sbTabAdmin(){
+  const box=$("#sbTabAdmin");if(!box)return;const r=await sbFn("tablet-admin",{action:"list"});
+  if(!$("#sbTabAdmin"))return;
+  if(!r.ok){box.querySelector(".card").innerHTML=`<div class="muted">${esc(r.error)}</div>`;return}
+  const wsN=ids=>(ids||[]).length?ids.map(u=>wsName(sbMap.ws[u]||"")).join(", "):"All workshops";
+  const here=sbTabKey(),fmt=d=>d?new Date(d).toLocaleString():"—";
+  const pin=Object.fromEntries(r.pins.map(p=>[p.operator_id,p]));
+  const tls=(db.operators||[]).filter(o=>o.sbId);
+  box.querySelector(".card").outerHTML=`<div class="card"><h2 style="margin-top:0">Tablets</h2>
+    <table><thead><tr><th>Name</th><th>Workshops</th><th>Status</th><th>Last used</th><th></th></tr></thead><tbody>
+    ${r.devices.map(d=>`<tr><td><b>${esc(d.name)}</b></td><td>${esc(wsN(d.workshop_ids))}</td><td>${d.active?`<span class="pill p-ok">Active</span>`:`<span class="pill p-bad">Disabled</span>`}</td><td class="muted">${fmt(d.last_used_at)}${d.last_user?" · "+esc(d.last_user):""}</td>
+      <td class="num"><button class="btn sec sm" data-dact="${d.id}" data-on="${d.active?0:1}">${d.active?"Disable":"Enable"}</button></td></tr>`).join("")||`<tr><td colspan="5" class="muted">No tablets registered yet.</td></tr>`}
+    </tbody></table>
+    <div class="row" style="margin-top:10px;gap:8px">${here?`<span class="muted">This device is registered as a tablet.</span><button class="btn sec sm" id="sbUnreg">Remove tablet key from this device</button>`:`<button class="btn" id="sbReg">📟 Register this device as a tablet</button>`}</div></div>
+  <div class="card" style="margin-top:12px;padding:0;overflow:auto"><table><thead><tr><th>Team leader</th><th>Workshop</th><th>PIN</th><th>Set on</th><th></th></tr></thead><tbody>
+    ${tls.map(o=>{const p=pin[o.sbId],lk=p&&p.locked_until&&new Date(p.locked_until)>new Date();return `<tr><td><b>${esc(o.name)}</b></td><td>${esc(wsName(o.ws))}</td>
+      <td>${p?(lk?`<span class="pill p-bad">Locked</span>`:`<span class="pill p-ok">Set</span>`):`<span class="muted">Not set</span>`}</td><td class="muted">${p?fmt(p.set_at):"—"}</td>
+      <td class="num" style="white-space:nowrap"><button class="btn sm" data-spin="${o.sbId}" data-nm="${esc(o.name)}">${p?"Reset PIN":"Set PIN"}</button>${lk?` <button class="btn sec sm" data-unl="${o.sbId}">Unlock</button>`:""}${p?` <button class="btn sec sm" data-rpin="${o.sbId}">Remove</button>`:""}</td></tr>`}).join("")}
+  </tbody></table></div>
+  <div class="note">Team leaders sign in on registered tablets with their name and a 4-digit PIN. Tell each team leader his PIN in person. 5 wrong PINs lock the account for 15 min. Tablets sign out after ${SB_IDLE_MIN} min without use.</div>`;
+  const act=async(body,ok)=>{const x=await sbFn("tablet-admin",body);if(!x.ok){toast(x.error);return null}if(ok)toast(ok);sbTabAdmin();return x};
+  box.querySelectorAll("[data-dact]").forEach(b=>b.onclick=()=>act({action:"set_device_active",id:b.dataset.dact,active:b.dataset.on==="1"},"Saved"));
+  box.querySelectorAll("[data-unl]").forEach(b=>b.onclick=()=>act({action:"unlock_pin",operator_id:b.dataset.unl},"Unlocked"));
+  box.querySelectorAll("[data-rpin]").forEach(b=>b.onclick=()=>{if(confirm("Remove this PIN? The team leader can no longer sign in."))act({action:"remove_pin",operator_id:b.dataset.rpin},"PIN removed")});
+  box.querySelectorAll("[data-spin]").forEach(b=>b.onclick=()=>modal("PIN · "+b.dataset.nm,fld("New 4-digit PIN",`<input name="pin" required pattern="[0-9]{4}" maxlength="4" inputmode="numeric" autocomplete="off">`),
+    f=>{act({action:"set_pin",operator_id:b.dataset.spin,pin:f.pin},"PIN saved for "+b.dataset.nm)}));
+  const ub=$("#sbUnreg");if(ub)ub.onclick=()=>{if(confirm("Remove the tablet key from this device? It will show the email login again."))sbTabSet("");sbTabAdmin()};
+  const rb=$("#sbReg");if(rb)rb.onclick=()=>modal("Register this device as a tablet",
+    fld("Tablet name",`<input name="name" required placeholder="e.g. Carpentry tablet 1">`)+
+    fld("Workshops (team leaders shown on this tablet)",`<div class="row" style="flex-wrap:wrap">${db.workshops.filter(w=>w.sbId).map(w=>`<label class="row" style="gap:4px"><input type="checkbox" name="ws_${w.id}"> ${esc(w.name)}</label>`).join("")}</div>`),
+    async f=>{const ws=db.workshops.filter(w=>w.sbId&&f["ws_"+w.id]).map(w=>w.sbId);
+      const x=await sbFn("tablet-admin",{action:"register_device",name:f.name,workshop_ids:ws});
+      if(!x.ok){toast(x.error);return}sbTabSet(x.key);toast("This device is now a tablet. Sign out to see the team leader sign-in.");sbTabAdmin()});
+}
+
 const _sbRenderUser=renderUser;
 renderUser=function(){_sbRenderUser();const e=$("#userBox");if(e&&sbLastSync&&!e.querySelector(".sbstat"))e.insertAdjacentHTML("beforeend",`<div class="sbstat" style="font-size:11px;margin-top:6px;opacity:.8">● Supabase · ${sbLastSync.toLocaleTimeString()}</div>`)};
 SB.auth.onAuthStateChange((ev)=>{if(ev==="SIGNED_IN"&&!me)setTimeout(sbBoot,0);if(ev==="SIGNED_OUT"&&me){me=null;console.warn("[MES] signed out");setTimeout(render,0)}});
