@@ -23,6 +23,17 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   try {
     const body = await req.json().catch(() => ({}));
+    if (body.action === "pair") {
+      const raw = String(body.code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (raw.length !== 8) return fail("Enter the 8-character code from the admin screen.");
+      const { data: d } = await admin.from("device").select("id,name,pair_expires_at").eq("pair_code_hash", await sha256(raw)).maybeSingle();
+      if (!d) return fail("This code is not valid. Check it, or ask your admin for a new code.");
+      if (!d.pair_expires_at || new Date(d.pair_expires_at) < new Date()) return fail("This code has expired. Ask your admin for a new code.");
+      const key = randomB64(32);
+      const { error } = await admin.from("device").update({ key_hash: await sha256(key), pair_code_hash: null, pair_expires_at: null, paired_at: new Date().toISOString(), active: true }).eq("id", d.id);
+      if (error) return fail("Could not register the tablet. Try again.");
+      return out({ ok: true, key, device: d.name });
+    }
     const dev = await deviceByKey(body.device_key);
     if (!dev) return fail("This tablet is not registered or was disabled. Ask your admin.", { device: false });
     const inWs = (ws: string | null) => !dev.workshop_ids?.length || (ws && dev.workshop_ids.includes(ws));

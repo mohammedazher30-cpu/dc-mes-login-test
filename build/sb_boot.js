@@ -442,7 +442,19 @@ loginScreen=function(){
   const key=sbTabKey();
   if(!key||ui.sbEmailMode){_sbEmailLogin();
     if(key&&$("#sbStep1"))$("#sbStep1").insertAdjacentHTML("afterend",`<div style="text-align:center;margin-top:10px"><button class="btn sec sm" id="sbBackPin">← Team leader sign-in</button></div>`);
-    const bb=$("#sbBackPin");if(bb)bb.onclick=()=>{ui.sbEmailMode=false;loginScreen()};return}
+    const bb=$("#sbBackPin");if(bb)bb.onclick=()=>{ui.sbEmailMode=false;loginScreen()};
+    if(!key&&$("#sbStep1")){$("#sbStep1").insertAdjacentHTML("afterend",`<div id="sbPair" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line,#e5e7eb);text-align:center">
+      <button class="btn sec" id="sbPairBtn" style="width:100%">📟 Register this tablet (code)</button>
+      <div id="sbPairBox" style="display:none"><label class="muted" style="font-size:12px">Code from the admin screen</label>
+        <input id="sbPairCode" placeholder="XXXX-XXXX" maxlength="9" autocomplete="off" autocapitalize="characters" style="width:100%;margin:4px 0 10px;text-align:center;font-size:22px;letter-spacing:4px;text-transform:uppercase">
+        <button class="btn big" id="sbPairGo" style="width:100%">Register</button></div></div>`);
+      $("#sbPairBtn").onclick=()=>{$("#sbPairBtn").style.display="none";$("#sbPairBox").style.display="";$("#sbPairCode").focus()};
+      const pair=async()=>{const code=$("#sbPairCode").value.trim();if(!code)return;$("#sbPairGo").disabled=true;$("#sbMsg").style.color="";$("#sbMsg").textContent="Registering…";
+        const r=await sbFn("tablet-login",{action:"pair",code});$("#sbPairGo").disabled=false;
+        if(!r.ok){$("#sbMsg").textContent=r.error;$("#sbMsg").style.color="var(--bad)";return}
+        sbTabSet(r.key);ui.sbEmailMode=false;ui.sbMsg="";loginScreen();toast("Tablet registered: "+r.device)};
+      $("#sbPairGo").onclick=pair;$("#sbPairCode").onkeydown=e=>{if(e.key==="Enter")pair()};}
+    return}
   document.body.classList.add("locked");
   const msg=ui.sbMsg||"";ui.sbMsg="";
   $("#main").innerHTML=`<div class="login"><div class="login-card" style="max-width:560px">
@@ -499,10 +511,10 @@ async function sbTabAdmin(){
   const tls=(db.operators||[]).filter(o=>o.sbId);
   box.querySelector(".card").outerHTML=`<div class="card"><h2 style="margin-top:0">Tablets</h2>
     <table><thead><tr><th>Name</th><th>Workshops</th><th>Status</th><th>Last used</th><th></th></tr></thead><tbody>
-    ${r.devices.map(d=>`<tr><td><b>${esc(d.name)}</b></td><td>${esc(wsN(d.workshop_ids))}</td><td>${d.active?`<span class="pill p-ok">Active</span>`:`<span class="pill p-bad">Disabled</span>`}</td><td class="muted">${fmt(d.last_used_at)}${d.last_user?" · "+esc(d.last_user):""}</td>
-      <td class="num"><button class="btn sec sm" data-dact="${d.id}" data-on="${d.active?0:1}">${d.active?"Disable":"Enable"}</button></td></tr>`).join("")||`<tr><td colspan="5" class="muted">No tablets registered yet.</td></tr>`}
+    ${r.devices.map(d=>`<tr><td><b>${esc(d.name)}</b></td><td>${esc(wsN(d.workshop_ids))}</td><td>${d.pair_expires_at?(new Date(d.pair_expires_at)>new Date()?`<span class="pill p-blue">Waiting for code · until ${new Date(d.pair_expires_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</span>`:`<span class="pill p-bad">Code expired</span>`):d.active?`<span class="pill p-ok">Active</span>`:`<span class="pill p-bad">Disabled</span>`}</td><td class="muted">${fmt(d.last_used_at)}${d.last_user?" · "+esc(d.last_user):""}</td>
+      <td class="num" style="white-space:nowrap">${d.pair_expires_at||!d.active?`<button class="btn sm" data-dcode="${d.id}" data-nm="${esc(d.name)}">New code</button> `:""}${d.pair_expires_at?"":`<button class="btn sec sm" data-dact="${d.id}" data-on="${d.active?0:1}">${d.active?"Disable":"Enable"}</button>`}</td></tr>`).join("")||`<tr><td colspan="5" class="muted">No tablets registered yet.</td></tr>`}
     </tbody></table>
-    <div class="row" style="margin-top:10px;gap:8px">${here?`<span class="muted">This device is registered as a tablet.</span><button class="btn sec sm" id="sbUnreg">Remove tablet key from this device</button>`:`<button class="btn" id="sbReg">📟 Register this device as a tablet</button>`}</div></div>
+    <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap"><button class="btn" id="sbAddTab">➕ Add a tablet (code)</button>${here?`<span class="muted">This device is registered as a tablet.</span><button class="btn sec sm" id="sbUnreg">Remove tablet key from this device</button>`:`<button class="btn sec sm" id="sbReg">Register this device as a tablet</button>`}</div></div>
   <div class="card" style="margin-top:12px;padding:0;overflow:auto"><table><thead><tr><th>Team leader</th><th>Workshop</th><th>PIN</th><th>Set on</th><th></th></tr></thead><tbody>
     ${tls.map(o=>{const p=pin[o.sbId],lk=p&&p.locked_until&&new Date(p.locked_until)>new Date();return `<tr><td><b>${esc(o.name)}</b></td><td>${esc(wsName(o.ws))}</td>
       <td>${p?(lk?`<span class="pill p-bad">Locked</span>`:`<span class="pill p-ok">Set</span>`):`<span class="muted">Not set</span>`}</td><td class="muted">${p?fmt(p.set_at):"—"}</td>
@@ -515,6 +527,18 @@ async function sbTabAdmin(){
   box.querySelectorAll("[data-rpin]").forEach(b=>b.onclick=()=>{if(confirm("Remove this PIN? The team leader can no longer sign in."))act({action:"remove_pin",operator_id:b.dataset.rpin},"PIN removed")});
   box.querySelectorAll("[data-spin]").forEach(b=>b.onclick=()=>modal("PIN · "+b.dataset.nm,fld("New 4-digit PIN",`<input name="pin" required pattern="[0-9]{4}" maxlength="4" inputmode="numeric" autocomplete="off">`),
     f=>{act({action:"set_pin",operator_id:b.dataset.spin,pin:f.pin},"PIN saved for "+b.dataset.nm)}));
+  const showCode=(name,x)=>modal("Tablet code · "+name,`<div style="text-align:center"><div class="muted">On the tablet: open <b>DC MES</b> → <b>Register this tablet (code)</b> → type:</div>
+      <div style="font-size:40px;font-weight:700;letter-spacing:6px;margin:14px 0;font-family:monospace">${esc(x.code)}</div>
+      <div class="muted">Valid until ${new Date(x.expires).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})} (10 min), one use only.</div></div>`,()=>{sbTabAdmin()});
+  $("#sbAddTab").onclick=()=>addTab();
+  function addTab(){modal("Add a tablet",
+    fld("Tablet name",`<input name="name" required placeholder="e.g. Painting Workshop 1">`)+
+    fld("Workshops (team leaders shown on this tablet)",`<div class="row" style="flex-wrap:wrap">${db.workshops.filter(w=>w.sbId).map(w=>`<label class="row" style="gap:4px"><input type="checkbox" name="ws_${w.id}"> ${esc(w.name)}</label>`).join("")}</div>`),
+    async f=>{const ws=db.workshops.filter(w=>w.sbId&&f["ws_"+w.id]).map(w=>w.sbId);
+      const x=await sbFn("tablet-admin",{action:"add_device",name:f.name,workshop_ids:ws});
+      if(!x.ok){toast(x.error);return}setTimeout(()=>showCode(f.name,x),50)})}
+  box.querySelectorAll("[data-dcode]").forEach(b=>b.onclick=async()=>{if(!confirm("Make a new registration code for "+b.dataset.nm+"? If this tablet was already registered, it must be registered again with the new code."))return;
+    const x=await sbFn("tablet-admin",{action:"new_code",id:b.dataset.dcode});if(!x.ok){toast(x.error);return}showCode(b.dataset.nm,x)});
   const ub=$("#sbUnreg");if(ub)ub.onclick=()=>{if(confirm("Remove the tablet key from this device? It will show the email login again."))sbTabSet("");sbTabAdmin()};
   const rb=$("#sbReg");if(rb)rb.onclick=()=>modal("Register this device as a tablet",
     fld("Tablet name",`<input name="name" required placeholder="e.g. Carpentry tablet 1">`)+

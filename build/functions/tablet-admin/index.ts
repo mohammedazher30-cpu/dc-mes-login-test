@@ -30,7 +30,7 @@ Deno.serve(async (req) => {
     const b = await req.json().catch(() => ({}));
     if (b.action === "list") {
       const [{ data: devices }, { data: pins }] = await Promise.all([
-        admin.from("device").select("id,name,workshop_ids,active,registered_at,last_used_at,last_user").order("registered_at"),
+        admin.from("device").select("id,name,workshop_ids,active,registered_at,last_used_at,last_user,pair_expires_at,paired_at").order("registered_at"),
         admin.from("operator_pin").select("operator_id,failed_pins,locked_until,set_at")]);
       return out({ ok: true, devices: devices || [], pins: pins || [] });
     }
@@ -42,6 +42,24 @@ Deno.serve(async (req) => {
       const { data, error } = await admin.from("device").insert({ name, workshop_ids: ws, key_hash: await sha256(key), registered_by: me.id }).select("id").single();
       if (error) return fail(error.message);
       return out({ ok: true, id: data.id, key });
+    }
+    if (b.action === "add_device" || b.action === "new_code") {
+      /* one-time code the tablet types in to register itself (no email, no admin sign-in on the tablet) */
+      const ABC = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+      const raw = [...crypto.getRandomValues(new Uint8Array(8))].map((x) => ABC[x % ABC.length]).join("");
+      const code = raw.slice(0, 4) + "-" + raw.slice(4);
+      const exp = new Date(Date.now() + 10 * 60000).toISOString();
+      if (b.action === "add_device") {
+        const name = String(b.name || "").trim();
+        if (!name) return fail("Enter a tablet name.");
+        const ws = Array.isArray(b.workshop_ids) ? b.workshop_ids : [];
+        const { data, error } = await admin.from("device").insert({ name, workshop_ids: ws, key_hash: await sha256("pending-" + randomB64(24)), active: false,
+          pair_code_hash: await sha256(raw), pair_expires_at: exp, registered_by: me.id }).select("id").single();
+        if (error) return fail(error.message);
+        return out({ ok: true, id: data.id, code, expires: exp });
+      }
+      const { error } = await admin.from("device").update({ pair_code_hash: await sha256(raw), pair_expires_at: exp }).eq("id", b.id);
+      return error ? fail(error.message) : out({ ok: true, code, expires: exp });
     }
     if (b.action === "set_device_active") {
       const { error } = await admin.from("device").update({ active: !!b.active }).eq("id", b.id);
