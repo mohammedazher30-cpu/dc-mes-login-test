@@ -391,7 +391,7 @@ async function sbBoot(){
     sbLastSync=new Date();
     db.syncLog=db.syncLog||[];db.syncLog.unshift({at:sbLastSync.toISOString(),dir:"in",msg:`Supabase: ${s3.w} workshops, ${s3.m} stations, ${s3.a} assets, ${s3.o} team leaders, ${s3.raw} raw materials · ${s2.p} project(s), ${s2.t} tasks, ${s2.d} dependencies · ${s4.n} products, ${s5.n} work orders · ${s6.executions} runs, ${s6.stops} stops, ${s6.consumption} material records · ${s7.n} shipments`});
     _sbPersist();
-    me=u;sbBooting=false;if(!myViews().includes(view))view=myViews()[0];render();sbIdleReset();
+    me=u;sbBooting=false;if(!myViews().includes(view))view=myViews()[0];render();sbIdleReset();sbLiveStart();
   }catch(e){sbBooting=false;console.error(e);$("#main").innerHTML=`<div class="card" style="max-width:520px;margin:40px auto"><h2>Could not load data from Supabase</h2><p class="muted">${esc(e.message||String(e))}</p><button class="btn" onclick="location.reload()">Try again</button></div>`}
 }
 loginScreen=function(){
@@ -509,8 +509,49 @@ async function sbTabAdmin(){
       if(!x.ok){toast(x.error);return}sbTabSet(x.key);toast("This device is now a tablet. Sign out to see the team leader sign-in.");sbTabAdmin()});
 }
 
+
+/* ---- part 8: live updates (Supabase Realtime) ---- */
+const SB_LIVE_T=["work_order","work_order_operation","execution","stop_event","machine","material_issue","scrap_log","shipment","crate","project_task"];
+let sbLiveCh=null,sbLiveDirty=new Set(),sbLiveT=null,sbLiveRun=false,sbLiveOk=false,sbLiveAt=0;
+/* never reload under someone who is filling a form or typing */
+const sbBusyUI=()=>{const mb=$("#modalBg");if(mb&&mb.classList.contains("show"))return true;const a=document.activeElement;return !!(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)&&a!==document.body&&a.closest&&a.closest("#main"))};
+function sbLiveKick(ms){clearTimeout(sbLiveT);sbLiveT=setTimeout(sbLiveRefresh,ms==null?1500:ms)}
+async function sbLiveRefresh(){
+  if(!me||sbBooting||!sbLiveDirty.size)return;
+  if(sbLiveRun||sbBusyUI()){sbLiveKick(2500);return}
+  sbLiveRun=true;
+  try{
+    /* let this device's own saves finish first */
+    const Q=[...Object.values(sbWoQ),...Object.values(sbLogQ),...(db.shipments||[]).map(x=>sbShipQ.get(x)).filter(Boolean)];
+    await Promise.allSettled(Q);
+    if(sbBusyUI()){sbLiveKick(2500);return}
+    const d=sbLiveDirty;sbLiveDirty=new Set();const has=(...t)=>t.some(x=>d.has(x));
+    if(has("machine")){const {data,error}=await SB.from("machine").select("id,state,stop_reason");if(error)throw error;
+      data.forEach(r=>{const m=(db.machines||[]).find(x=>x.sbId===r.id);if(!m)return;m.state=r.state||"run";m.reason=r.stop_reason||"";sbSnap.mach[m.id]=sbMachKey(m)})}
+    if(has("project_task")){const rows=await sbAll(()=>SB.from("project_task").select("id,status,done_at,done_by,zoho_pct"));
+      rows.forEach(r=>{const k=(db.tasks||[]).find(x=>x.sbId===r.id);if(!k)return;k.status=r.status==="in progress"?"inprog":r.status;k.doneAt=r.done_at;k.doneBy=r.done_by||"";k.zohoPct=r.zoho_pct||0;sbSnap.task[k.sbId]=sbTaskKey(k)})}
+    if(has("work_order","work_order_operation","execution"))await sbLoadWOs();
+    if(has("execution","stop_event","material_issue","scrap_log","work_order"))await sbLoadLogs();
+    if(has("shipment","crate"))await sbLoadShipments();
+    sbBooting=true;try{try{syncTailFromCrates()}catch(e){}_sbPersist()}finally{sbBooting=false}
+    sbLastSync=new Date();sbLiveAt=Date.now();
+    if(sbBusyUI()){sbLiveKick(2500);sbLiveDirty.add("_render");return}
+    render();
+  }catch(e){console.warn("[MES live]",e);SB_LIVE_T.forEach(t=>sbLiveDirty.add(t));sbLiveKick(10000)}
+  finally{sbLiveRun=false}
+}
+function sbLiveStart(){
+  if(sbLiveCh)return;
+  sbLiveCh=SB.channel("mes-live");
+  SB_LIVE_T.forEach(t=>sbLiveCh.on("postgres_changes",{event:"*",schema:"public",table:t},()=>{sbLiveDirty.add(t);sbLiveKick()}));
+  sbLiveCh.subscribe(st=>{const ok=st==="SUBSCRIBED";if(ok&&!sbLiveOk&&sbLiveAt){SB_LIVE_T.forEach(t=>sbLiveDirty.add(t));sbLiveKick(500)}sbLiveOk=ok;if(!sbLiveAt)sbLiveAt=Date.now();try{renderUser()}catch(e){}});
+}
+function sbLiveStop(){if(sbLiveCh){try{SB.removeChannel(sbLiveCh)}catch(e){}sbLiveCh=null;sbLiveOk=false}}
+/* tablet woke up or tab came back: catch up on anything missed */
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&me&&Date.now()-sbLiveAt>30000){SB_LIVE_T.forEach(t=>sbLiveDirty.add(t));sbLiveKick(300)}});
+
 const _sbRenderUser=renderUser;
-renderUser=function(){_sbRenderUser();const e=$("#userBox");if(e&&sbLastSync&&!e.querySelector(".sbstat"))e.insertAdjacentHTML("beforeend",`<div class="sbstat" style="font-size:11px;margin-top:6px;opacity:.8">● Supabase · ${sbLastSync.toLocaleTimeString()}</div>`)};
-SB.auth.onAuthStateChange((ev)=>{if(ev==="SIGNED_IN"&&!me)setTimeout(sbBoot,0);if(ev==="SIGNED_OUT"&&me){me=null;console.warn("[MES] signed out");setTimeout(render,0)}});
+renderUser=function(){_sbRenderUser();const e=$("#userBox");if(!e||!sbLastSync)return;const o=e.querySelector(".sbstat");if(o)o.remove();e.insertAdjacentHTML("beforeend",`<div class="sbstat" style="font-size:11px;margin-top:6px;opacity:.85"><span style="color:${sbLiveOk?"#00A754":"#b42318"}">●</span> Supabase ${sbLiveOk?"live":"offline"} · ${sbLastSync.toLocaleTimeString()}</div>`)};
+SB.auth.onAuthStateChange((ev)=>{if(ev==="SIGNED_OUT")sbLiveStop();if(ev==="SIGNED_IN"&&!me)setTimeout(sbBoot,0);if(ev==="SIGNED_OUT"&&me){me=null;console.warn("[MES] signed out");setTimeout(render,0)}});
 me=null;
 sbBoot();
