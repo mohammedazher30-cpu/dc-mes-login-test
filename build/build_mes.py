@@ -13,6 +13,8 @@ def rep(old,new,count=1):
 qr='<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>'
 rep(qr, qr+'\n<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>')
 rep('<title>MES Demo</title>','<title>DC MES · Test (Supabase)</title>')
+# home-screen app (tablet): manifest, icon, full-screen settings
+rep('<title>DC MES · Test (Supabase)</title>','<title>DC MES · Test (Supabase)</title>\n<link rel="manifest" href="app/manifest.webmanifest">\n<meta name="theme-color" content="#00A754">\n<meta name="mobile-web-app-capable" content="yes">\n<meta name="apple-mobile-web-app-capable" content="yes">\n<meta name="apple-mobile-web-app-title" content="DC MES">\n<meta name="apple-mobile-web-app-status-bar-style" content="default">\n<link rel="apple-touch-icon" href="app/icon-180.png">\n<link rel="icon" type="image/png" href="app/icon-192.png">')
 
 # drop embedded Zoho Inventory list (raw materials now come from Supabase)
 k='window.RAW_IMPORT='

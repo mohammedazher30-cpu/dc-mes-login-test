@@ -1,0 +1,17 @@
+{
+  "name": "DC MES",
+  "short_name": "DC MES",
+  "description": "DC shop-floor MES (test)",
+  "id": "../mes.html",
+  "start_url": "../mes.html?app=1",
+  "scope": "../",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#00A754",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
