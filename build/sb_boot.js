@@ -5,6 +5,7 @@ let sbSnap={task:{},mach:{},wo:{}},sbBooting=false,sbLastSync=null,sbMap={ws:{},
 window.ZOHO_IMPORT=[]; /* projects and tasks come from Supabase */
 const sbTaskKey=k=>JSON.stringify([k.status,k.doneAt||null,k.doneBy||"",k.zohoPct||0]);
 const sbMachKey=m=>JSON.stringify([m.state||"run",m.reason||""]);
+const sbOpKey=o=>JSON.stringify([o.name||"",o.ws||"",o.machine||"",o.skills||""]);
 async function sbAll(q){let out=[],from=0;for(;;){const {data,error}=await q().range(from,from+999);if(error)throw error;out=out.concat(data);if(data.length<1000)return out;from+=1000}}
 
 /* ---- part 2: projects, tasks, dependencies ---- */
@@ -68,6 +69,7 @@ async function sbLoadMaster(){
   db.operators=o.data.map(x=>{const ex=(db.operators||[]).find(y=>(x.code&&y.code===x.code)||y.name===x.name);
     const id=ex?ex.id:"OP-"+x.code;sbMap.op[x.id]=id;
     return Object.assign(ex||{},{id,name:x.name,ws:x.workshop&&x.workshop.code,machine:x.machine&&x.machine.code,skills:x.skills||"",code:/^TL-/.test(x.code)?"":x.code,sbId:x.id})});
+  sbSnap.op={};db.operators.forEach(x=>sbSnap.op[x.id]=sbOpKey(x));
   /* raw material catalogs + raw materials (stock figures stay local until the Zoho Inventory stock sync is built) */
   db.rawCatalogs=c.data.map(x=>({id:x.code,name:x.name}));
   const local=new Map(db.articles.filter(x=>x.type==="raw").map(x=>[x.id,x]));
@@ -350,6 +352,16 @@ function sbQueueShip(s){sbSnap.ship[s.id]=sbShipKey(s);if(!s.sbId)s.sbPending=tr
 
 /* push changes made in the MES back to Supabase: task status, station state, work orders, terminal records, shipments */
 
+
+/* team leaders (operators): name, workshop, main station, skills; his MES login follows his workshop */
+async function sbSaveOp(o){
+  try{
+    const row={name:o.name,workshop_id:sbWsU(o.ws),machine_id:sbMachU(o.machine)||null,skills:o.skills||null};
+    if(!o.sbId){const {data,error}=await SB.from("operator").insert({...row,company_id:sbCompany,code:o.code||o.id}).select("id").single();if(error)throw error;o.sbId=data.id;sbMap.op[data.id]=o.id;_sbPersist();return}
+    const {error}=await SB.from("operator").update(row).eq("id",o.sbId);if(error)throw error;
+    if(row.workshop_id){const {error:e2}=await SB.from("app_user").update({workshop_ids:[row.workshop_id],full_name:o.name}).eq("operator_id",o.sbId);if(e2)console.warn(e2)}
+  }catch(e){console.warn(e);delete sbSnap.op[o.id];toast("Team leader "+o.name+" not saved to Supabase: "+(e.message||e))}
+}
 /* ---- part 9: only send changes this role may make (the database enforces the same rules) ---- */
 const sbR=()=>(me&&me.sbRole)||"";
 const sbIsTL=()=>["team_leader","supervisor"].includes(sbR());
@@ -368,6 +380,7 @@ persist=function(){if(me&&!sbBooting){try{syncTailFromCrates()}catch(e){console.
   (sbCan.task()?(db.tasks||[]):[]).filter(k=>k.sbId&&sbSnap.task[k.sbId]!==sbTaskKey(k)).forEach(k=>{sbSnap.task[k.sbId]=sbTaskKey(k);
     SB.from("project_task").update({status:k.status==="inprog"?"in progress":k.status,done_at:k.doneAt||null,done_by:k.doneBy||null,zoho_pct:Math.round(k.zohoPct||0)}).eq("id",k.sbId)
       .then(({error})=>{if(error){delete sbSnap.task[k.sbId];toast("Could not save task to Supabase")}})});
+  sbSnap.op=sbSnap.op||{};(sbCan.full()?(db.operators||[]):[]).filter(o=>sbSnap.op[o.id]!==sbOpKey(o)).forEach(o=>{sbSnap.op[o.id]=sbOpKey(o);sbSaveOp(o)});
   (db.machines||[]).filter(x=>x.sbId&&sbSnap.mach[x.id]!==sbMachKey(x)&&sbCan.mach(x)).forEach(x=>{sbSnap.mach[x.id]=sbMachKey(x);
     SB.from("machine").update({state:["run","stopped","out"].includes(x.state)?x.state:"run",stop_reason:x.reason||null}).eq("id",x.sbId)
       .then(({error})=>{if(error){delete sbSnap.mach[x.id];toast("Could not save station state to Supabase")}})});
