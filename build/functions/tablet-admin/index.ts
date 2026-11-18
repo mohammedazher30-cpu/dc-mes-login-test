@@ -61,6 +61,17 @@ Deno.serve(async (req) => {
       const { error } = await admin.from("device").update({ pair_code_hash: await sha256(raw), pair_expires_at: exp }).eq("id", b.id);
       return error ? fail(error.message) : out({ ok: true, code, expires: exp });
     }
+    if (b.action === "signin_link") {
+      /* one-time sign-in for an office user, sent by the admin on WhatsApp/Teams (company email scanners use up normal links) */
+      const email = String(b.email || "").trim().toLowerCase();
+      const { data: u } = await admin.from("app_user").select("id,full_name,email,role,active").ilike("email", email).maybeSingle();
+      if (!u) return fail("No MES user with this email. Invite him first.");
+      if (!u.active) return fail("This user is deactivated.");
+      if (u.role === "team_leader") return fail("Team leaders sign in on tablets with their PIN.");
+      const { data: link, error } = await admin.auth.admin.generateLink({ type: "magiclink", email: u.email });
+      if (error || !link?.properties?.hashed_token) return fail("Could not create the link: " + (error?.message || "unknown"));
+      return out({ ok: true, token_hash: link.properties.hashed_token, name: u.full_name || u.email });
+    }
     if (b.action === "set_device_active") {
       const { error } = await admin.from("device").update({ active: !!b.active }).eq("id", b.id);
       return error ? fail(error.message) : out({ ok: true });

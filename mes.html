@@ -2517,7 +2517,27 @@ async function sbProfileToMe(){
   const {data:row}=await SB.from("app_user").select("workshop_ids,operator_id").eq("id",p.id).maybeSingle();
   return {id:p.id,name:p.full_name,email:p.email,role:SB_ROLE[p.role]||"operator",sbRole:p.role,wsIds:(row&&row.workshop_ids)||[],opId:row&&row.operator_id,ws:[],op:"",sb:true};
 }
+
+/* ---- one-time sign-in link made by an admin (works with Microsoft 365 link scanning: needs a button click) ---- */
+let SB_SIGNIN=(()=>{const m=(location.hash||"").match(/^#signin=([^&]+)(?:&n=([^&]*))?/);if(!m)return null;
+  try{history.replaceState(null,"",location.pathname+location.search)}catch(e){}return {th:decodeURIComponent(m[1]),name:decodeURIComponent(m[2]||"")}})();
+function sbSigninScreen(){
+  document.body.classList.add("locked");
+  $("#main").innerHTML=`<div class="login"><div class="login-card" style="max-width:440px;text-align:center">
+    <h1 style="margin:4px 0 6px">${t("brand")}</h1>
+    <div class="muted" style="margin-bottom:16px">One-time sign-in link</div>
+    <button class="btn big" id="sbSiGo" style="width:100%">Sign in as ${esc(SB_SIGNIN.name||"this user")}</button>
+    <div class="note" id="sbSiMsg" style="margin-top:12px"></div>
+    <div style="margin-top:12px"><button class="btn sec sm" id="sbSiCancel">Cancel</button></div></div></div>`;
+  $("#sbSiCancel").onclick=()=>{SB_SIGNIN=null;render()};
+  $("#sbSiGo").onclick=async()=>{$("#sbSiGo").disabled=true;$("#sbSiMsg").textContent="Signing in…";
+    try{await SB.auth.signOut({scope:"local"})}catch(e){}
+    const {error}=await SB.auth.verifyOtp({token_hash:SB_SIGNIN.th,type:"magiclink"});
+    if(error){$("#sbSiMsg").style.color="var(--bad)";$("#sbSiMsg").textContent="This link has expired or was already used. Ask your admin for a new one.";$("#sbSiGo").disabled=false;return}
+    SB_SIGNIN=null;me=null;sbBooting=false;sbBoot()};
+}
 async function sbBoot(){
+  if(SB_SIGNIN){sbSigninScreen();return}
   if(sbBooting)return;sbBooting=true;
   try{
     const {data}=await SB.auth.getSession();
@@ -2645,7 +2665,7 @@ async function sbTabAdmin(){
     ${r.devices.map(d=>`<tr><td><b>${esc(d.name)}</b></td><td>${esc(wsN(d.workshop_ids))}</td><td>${d.pair_expires_at?(new Date(d.pair_expires_at)>new Date()?`<span class="pill p-blue">Waiting for code · until ${new Date(d.pair_expires_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</span>`:`<span class="pill p-bad">Code expired</span>`):d.active?`<span class="pill p-ok">Active</span>`:`<span class="pill p-bad">Disabled</span>`}</td><td class="muted">${fmt(d.last_used_at)}${d.last_user?" · "+esc(d.last_user):""}</td>
       <td class="num" style="white-space:nowrap">${d.pair_expires_at||!d.active?`<button class="btn sm" data-dcode="${d.id}" data-nm="${esc(d.name)}">New code</button> `:""}${d.pair_expires_at?"":`<button class="btn sec sm" data-dact="${d.id}" data-on="${d.active?0:1}">${d.active?"Disable":"Enable"}</button>`}</td></tr>`).join("")||`<tr><td colspan="5" class="muted">No tablets registered yet.</td></tr>`}
     </tbody></table>
-    <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap"><button class="btn" id="sbAddTab">➕ Add a tablet (code)</button>${here?`<span class="muted">This device is registered as a tablet.</span><button class="btn sec sm" id="sbUnreg">Remove tablet key from this device</button>`:`<button class="btn sec sm" id="sbReg">Register this device as a tablet</button>`}</div></div>
+    <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap"><button class="btn" id="sbAddTab">➕ Add a tablet (code)</button><button class="btn sec" id="sbUserLink">🔗 Sign-in link for office user</button>${here?`<span class="muted">This device is registered as a tablet.</span><button class="btn sec sm" id="sbUnreg">Remove tablet key from this device</button>`:`<button class="btn sec sm" id="sbReg">Register this device as a tablet</button>`}</div></div>
   <div class="card" style="margin-top:12px;padding:0;overflow:auto"><table><thead><tr><th>Team leader</th><th>Workshop</th><th>PIN</th><th>Set on</th><th></th></tr></thead><tbody>
     ${tls.map(o=>{const p=pin[o.sbId],lk=p&&p.locked_until&&new Date(p.locked_until)>new Date();return `<tr><td><b>${esc(o.name)}</b></td><td>${esc(wsName(o.ws))}</td>
       <td>${p?(lk?`<span class="pill p-bad">Locked</span>`:`<span class="pill p-ok">Set</span>`):`<span class="muted">Not set</span>`}</td><td class="muted">${p?fmt(p.set_at):"—"}</td>
@@ -2662,6 +2682,13 @@ async function sbTabAdmin(){
       <div style="font-size:40px;font-weight:700;letter-spacing:6px;margin:14px 0;font-family:monospace">${esc(x.code)}</div>
       <div class="muted">Valid until ${new Date(x.expires).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})} (10 min), one use only.</div></div>`,()=>{sbTabAdmin()});
   $("#sbAddTab").onclick=()=>addTab();
+  const lb=$("#sbUserLink");if(lb)lb.onclick=()=>modal("Sign-in link for office user",fld("Company email",`<input name="email" type="email" required placeholder="name@dcevent.com">`),
+    async f=>{const x=await sbFn("tablet-admin",{action:"signin_link",email:f.email.trim().toLowerCase()});if(!x.ok){toast(x.error);return}
+      const url=location.origin+location.pathname+"#signin="+encodeURIComponent(x.token_hash)+"&n="+encodeURIComponent(x.name);
+      setTimeout(()=>{modal("Sign-in link · "+x.name,`<div class="muted" style="margin-bottom:8px">Send this to <b>${esc(x.name)}</b> (WhatsApp / Teams). He opens it on his own laptop and clicks <b>Sign in</b>. Valid 1 hour, one use only.</div>
+        <textarea id="sbLinkTxt" readonly style="width:100%;height:90px;font-size:12px">${esc(url)}</textarea>
+        <button type="button" class="btn" id="sbLinkCopy" style="margin-top:8px">📋 Copy link</button>`,()=>{});
+        const c=$("#sbLinkCopy");if(c)c.onclick=async()=>{try{await navigator.clipboard.writeText(url);toast("Link copied")}catch(e){$("#sbLinkTxt").select();document.execCommand("copy");toast("Link copied")}}},50)});
   function addTab(){modal("Add a tablet",
     fld("Tablet name",`<input name="name" required placeholder="e.g. Painting Workshop 1">`)+
     fld("Workshops (team leaders shown on this tablet)",`<div class="row" style="flex-wrap:wrap">${db.workshops.filter(w=>w.sbId).map(w=>`<label class="row" style="gap:4px"><input type="checkbox" name="ws_${w.id}"> ${esc(w.name)}</label>`).join("")}</div>`),
