@@ -39,5 +39,9 @@ if _bo in src:
     src=src.replace(_bo,_bn).replace('v.replace(BIDI_RE,"⁦$1⁩")','v.replace(BIDI_RE,"$1⁦$2⁩")')
 elif '(?<' in src:
     print('WARNING: regex lookbehind still in the page; old iPads will show a blank page')
+
+# product name in the sidebar / login: "DC MES" (no demo / phase label)
+src=src.replace('brand:"MES Demo"','brand:"DC MES"').replace('brand:"نظام MES تجريبي"','brand:"DC MES"')
+src=src.replace('phase:"Phase 2 · Shop floor"','phase:""').replace('phase:"المرحلة 2 · أرضية المصنع"','phase:""')
 open(OUT,'w',encoding='utf-8').write(src)
 print('ok',len(src))
