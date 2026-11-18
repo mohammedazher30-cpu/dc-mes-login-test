@@ -411,7 +411,7 @@ async function sbCamOpen(){
   const ov=document.createElement("div");ov.id="sbCamOv";
   ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#fff;font-family:inherit";
   ov.innerHTML=`<div style="font-size:16px;font-weight:600">📷 Point the camera at the crate QR label</div>
-    <div style="position:relative;width:min(92vw,560px);aspect-ratio:4/3;background:#000;border-radius:10px;overflow:hidden">
+    <div style="position:relative;width:min(92vw,560px);height:min(69vw,420px);background:#000;border-radius:10px;overflow:hidden">
       <video id="sbCamV" playsinline muted autoplay style="width:100%;height:100%;object-fit:cover"></video>
       <div style="position:absolute;inset:18%;border:3px solid #00A754;border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.25)"></div></div>
     <div id="sbCamMsg" style="min-height:24px;font-size:16px">Starting camera…</div>

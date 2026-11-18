@@ -31,5 +31,13 @@ rep('let me=null;try{const u=localStorage.getItem(KEY+"_user");me=u?by(db.users,
 tail='document.addEventListener("keydown",e=>{if(e.key==="Escape")closeModal()});\nrender();\n</script>'
 boot=open(''+__import__('os').path.join(__import__('os').path.dirname(__file__),'sb_boot.js')+'',encoding='utf-8').read()
 rep(tail,'document.addEventListener("keydown",e=>{if(e.key==="Escape")closeModal()});\n'+boot+'\n</script>')
+
+# older iPads (Safari before 16.4) cannot parse regex lookbehind: rewrite the Arabic BIDI fix without it
+_bo='const BIDI_RE=/(?<![⁦\\w])([A-Za-z0-9]+(?:[-–\\/:][A-Za-z0-9]+)+)(?![⁩\\w])/g;'
+_bn='const BIDI_RE=/(^|[^⁦\\w])([A-Za-z0-9]+(?:[-–\\/:][A-Za-z0-9]+)+)(?![⁩\\w])/g;'
+if _bo in src:
+    src=src.replace(_bo,_bn).replace('v.replace(BIDI_RE,"⁦$1⁩")','v.replace(BIDI_RE,"$1⁦$2⁩")')
+elif '(?<' in src:
+    print('WARNING: regex lookbehind still in the page; old iPads will show a blank page')
 open(OUT,'w',encoding='utf-8').write(src)
 print('ok',len(src))
