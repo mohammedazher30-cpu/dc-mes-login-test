@@ -2518,6 +2518,63 @@ async function sbProfileToMe(){
   return {id:p.id,name:p.full_name,email:p.email,role:SB_ROLE[p.role]||"operator",sbRole:p.role,wsIds:(row&&row.workshop_ids)||[],opId:row&&row.operator_id,ws:[],op:"",sb:true};
 }
 
+
+/* ---- camera QR scanning for crate scan boxes (tablet camera; uses BarcodeDetector or jsQR) ---- */
+const SB_JSQR="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
+let sbCam=null;
+function sbLoadJsQR(){return window.jsQR?Promise.resolve():new Promise((ok,no)=>{const sc=document.createElement("script");sc.src=SB_JSQR;sc.onload=ok;sc.onerror=()=>no(new Error("Could not load the QR reader. Check the internet connection."));document.head.appendChild(sc)})}
+async function sbCamOpen(){
+  if(sbCam)return;
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){toast("This browser cannot use the camera.");return}
+  const ov=document.createElement("div");ov.id="sbCamOv";
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#fff;font-family:inherit";
+  ov.innerHTML=`<div style="font-size:16px;font-weight:600">📷 Point the camera at the crate QR label</div>
+    <div style="position:relative;width:min(92vw,560px);aspect-ratio:4/3;background:#000;border-radius:10px;overflow:hidden">
+      <video id="sbCamV" playsinline muted autoplay style="width:100%;height:100%;object-fit:cover"></video>
+      <div style="position:absolute;inset:18%;border:3px solid #00A754;border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.25)"></div></div>
+    <div id="sbCamMsg" style="min-height:24px;font-size:16px">Starting camera…</div>
+    <div id="sbCamLog" style="font-size:13px;opacity:.85;max-width:92vw;text-align:center"></div>
+    <button class="btn big" id="sbCamClose" style="min-width:200px">Done</button>`;
+  document.body.appendChild(ov);
+  const msg=m=>{const e=document.getElementById("sbCamMsg");if(e)e.textContent=m};
+  const st={ov,stream:null,raf:0,last:"",lastAt:0,done:[],det:null,cv:document.createElement("canvas")};sbCam=st;
+  document.getElementById("sbCamClose").onclick=sbCamClose;
+  try{
+    st.stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1280},height:{ideal:720}},audio:false});
+  }catch(e){msg("Camera not allowed. Allow camera access for this site in the browser settings, then try again.");return}
+  if(!sbCam)return sbCamStopStream(st);
+  const v=document.getElementById("sbCamV");v.srcObject=st.stream;try{await v.play()}catch(e){}
+  try{if("BarcodeDetector" in window){const f=await BarcodeDetector.getSupportedFormats();if(f.includes("qr_code"))st.det=new BarcodeDetector({formats:["qr_code"]})}}catch(e){st.det=null}
+  if(!st.det){try{await sbLoadJsQR()}catch(e){msg(e.message);return}}
+  msg("Scanning…");
+  const tick=async()=>{if(sbCam!==st)return;
+    let code="";
+    try{if(v.readyState>=2){
+      if(st.det){const r=await st.det.detect(v);if(r&&r[0])code=r[0].rawValue||""}
+      else{const w=Math.min(800,v.videoWidth),h=Math.round(v.videoHeight*w/v.videoWidth);st.cv.width=w;st.cv.height=h;const cx=st.cv.getContext("2d",{willReadFrequently:true});cx.drawImage(v,0,0,w,h);
+        const r=window.jsQR(cx.getImageData(0,0,w,h).data,w,h,{inversionAttempts:"dontInvert"});if(r)code=r.data||""}
+    }}catch(e){}
+    code=(code||"").trim();
+    if(code&&!(code===st.last&&Date.now()-st.lastAt<2500)){st.last=code;st.lastAt=Date.now();sbCamFeed(code)}
+    st.raf=requestAnimationFrame(tick)};
+  st.raf=requestAnimationFrame(tick);
+}
+function sbCamFeed(code){
+  const inp=document.getElementById("scan"),go=document.getElementById("scanGo");
+  const m=document.getElementById("sbCamMsg");
+  if(!inp||!go){if(m)m.textContent="Read "+code+" — but this screen has no scan box any more. Press Done.";return}
+  inp.value=code;go.click();
+  try{navigator.vibrate&&navigator.vibrate(120)}catch(e){}
+  try{const a=new (window.AudioContext||window.webkitAudioContext)(),o=a.createOscillator();o.frequency.value=880;o.connect(a.destination);o.start();o.stop(a.currentTime+.12)}catch(e){}
+  sbCam.done.unshift(code);if(m)m.textContent="✓ Read "+code;
+  const l=document.getElementById("sbCamLog");if(l)l.textContent="This session: "+sbCam.done.slice(0,12).join(" · ");
+}
+function sbCamStopStream(st){try{st.stream&&st.stream.getTracks().forEach(t=>t.stop())}catch(e){}}
+function sbCamClose(){const st=sbCam;if(!st)return;sbCam=null;cancelAnimationFrame(st.raf);sbCamStopStream(st);st.ov.remove()}
+/* add a 📷 button to every crate scan box, also after the screen redraws */
+function sbCamInject(){document.querySelectorAll(".scanbox").forEach(b=>{if(b.querySelector(".sbCamBtn"))return;
+  const btn=document.createElement("button");btn.type="button";btn.className="btn sm sbCamBtn";btn.textContent="📷 Camera";btn.style.marginLeft="6px";btn.onclick=sbCamOpen;b.appendChild(btn)})}
+try{new MutationObserver(()=>sbCamInject()).observe(document.getElementById("main")||document.body,{childList:true,subtree:true})}catch(e){}
 /* ---- one-time sign-in link made by an admin (works with Microsoft 365 link scanning: needs a button click) ---- */
 let SB_SIGNIN=(()=>{const m=(location.hash||"").match(/^#signin=([^&]+)(?:&n=([^&]*))?/);if(!m)return null;
   try{history.replaceState(null,"",location.pathname+location.search)}catch(e){}return {th:decodeURIComponent(m[1]),name:decodeURIComponent(m[2]||"")}})();
