@@ -184,9 +184,59 @@ async function sbSaveWO(w){
   else{await SB.from("work_order_material").delete().eq("work_order_id",w.sbId)}
   sbBase[w.id]=JSON.parse(JSON.stringify(sbClean(w)));sbSnap.wo[w.id]=sbWoKey(w);
 }
-function sbQueueWO(w){const key=sbWoKey(w);sbSnap.wo[w.id]=key;if(!w.sbId)w.sbPending=true;
-  sbWoQ[w.id]=(sbWoQ[w.id]||Promise.resolve()).then(()=>sbSaveWO(w)).then(()=>{_sbPersist()})
-    .catch(e=>{console.error(e);delete sbSnap.wo[w.id];toast("Work order "+w.id+" not saved to Supabase: "+(e.message||e))})}
+
+/* ---- outbox: changes not yet saved to Supabase survive no-internet and page reloads, and are retried ---- */
+const SB_OUTK="dcmes_outbox",SB_OUT_DAYS=3;
+let sbOut=(()=>{try{return JSON.parse(localStorage.getItem(SB_OUTK)||"{}")||{}}catch(e){return {}}})();
+const sbOutSave=()=>{try{localStorage.setItem(SB_OUTK,JSON.stringify(sbOut))}catch(e){}};
+const sbCopy=o=>o==null?null:JSON.parse(JSON.stringify(o));
+const sbNetErr=e=>(typeof navigator!=="undefined"&&navigator.onLine===false)||/fetch|network|load failed|timeout|aborted/i.test(String(e&&(e.message||e)));
+function sbOutAdd(kind,id,obj,key,base){sbOut[kind+"|"+id]={kind,id,key,obj:sbCopy(obj),base:sbCopy(base),at:Date.now(),label:sbOutLabel(kind,obj),err:"",failed:false};sbOutSave();sbOutBadge()}
+function sbOutDone(kind,id,key){const k=kind+"|"+id,e=sbOut[k];if(!e||(key!=null&&e.key!==key))return;delete sbOut[k];sbOutSave();sbOutBadge()}
+function sbOutFail(kind,id,err){const e=sbOut[kind+"|"+id];if(!e)return false;const net=sbNetErr(err);e.err=String((err&&err.message)||err||"");if(!net){e.tries=(e.tries||0)+1;if(e.tries>=3)e.failed=true}sbOutSave();sbOutBadge();return net}
+function sbOutLabel(kind,o){o=o||{};if(kind==="wo")return "Work order "+o.id;if(kind==="ship")return "Shipment "+o.id;if(kind==="task")return "Task "+(o.no||"");if(kind==="mach")return "Station "+(o.name||o.id);if(kind==="op")return "Team leader "+(o.name||"");
+  const m={"log:executions":"Run","log:stops":"Stop","log:consumption":"Material","log:scrapLog":"Scrap"}[kind]||kind;return m+" "+(o.id||"")+(o.wo?" · "+o.wo:"")}
+const sbOutList=()=>Object.values(sbOut);
+/* put unsaved local versions back after data was (re)loaded from Supabase, then queue them again */
+function sbOutApply(){
+  const old=Date.now()-SB_OUT_DAYS*864e5;let n=0;
+  for(const [k,e] of Object.entries(sbOut)){
+    if(e.at<old){delete sbOut[k];continue}
+    if(e.failed)continue;
+    const o=sbCopy(e.obj);
+    if(e.kind==="wo"){const L=db.workorders||(db.workorders=[]),i=L.findIndex(x=>x.id===e.id);if(i>=0){if(!o.sbId&&L[i].sbId)o.sbId=L[i].sbId;L[i]=o}else{if(!o.sbId)o.sbPending=true;L.push(o)}if(e.base)sbBase[e.id]=e.base;delete sbSnap.wo[e.id];n++}
+    else if(e.kind==="ship"){const L=db.shipments||(db.shipments=[]),i=L.findIndex(x=>x.id===e.id);if(i>=0){if(!o.sbId&&L[i].sbId)o.sbId=L[i].sbId;L[i]=o}else{if(!o.sbId)o.sbPending=true;L.push(o)}if(e.base)sbShipBase[e.id]=e.base;if(sbSnap.ship)delete sbSnap.ship[e.id];n++}
+    else if(e.kind.startsWith("log:")){const c=e.kind.slice(4),L=db[c]||(db[c]=[]),i=L.findIndex(x=>x.id===e.id);if(i>=0){if(!o.sbId&&L[i].sbId)o.sbId=L[i].sbId;L[i]=o}else{if(!o.sbId)o.sbPending=true;L.push(o)}if(sbSnap[c])delete sbSnap[c][e.id];n++}
+    else if(e.kind==="task"){const x=(db.tasks||[]).find(t=>t.sbId===e.id);if(x){Object.assign(x,{status:o.status,doneAt:o.doneAt,doneBy:o.doneBy,zohoPct:o.zohoPct});delete sbSnap.task[e.id];n++}}
+    else if(e.kind==="mach"){const x=by(db.machines||[],e.id);if(x){x.state=o.state;x.reason=o.reason;delete sbSnap.mach[e.id];n++}}
+  }
+  sbOutSave();sbOutBadge();return n;
+}
+/* small status pill: shown only while something is waiting to be saved */
+function sbOutBadge(){
+  if(typeof document==="undefined")return;const L=sbOutList(),bad=L.filter(e=>e.failed).length;let el=document.getElementById("sbOutPill");
+  if(!L.length){if(el)el.remove();return}
+  if(!el){el=document.createElement("button");el.id="sbOutPill";el.type="button";el.onclick=sbOutShow;
+    el.style.cssText="position:fixed;left:12px;bottom:12px;z-index:9000;border:0;border-radius:20px;padding:8px 14px;font:600 13px inherit;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer";document.body.appendChild(el)}
+  const off=navigator.onLine===false;el.style.background=bad?"#b42318":"#b54708";
+  el.textContent=bad?`⚠ ${bad} change(s) NOT saved – tap`:`⏳ ${L.length} change(s) waiting to save${off?" (no internet)":" – retrying"}`;
+}
+function sbOutShow(){
+  const L=sbOutList().sort((a,b)=>a.at-b.at);
+  modal("Changes waiting to be saved",`<div class="muted" style="margin-bottom:8px">They are kept on this device and sent to Supabase automatically when the connection is back.</div>
+    <table><thead><tr><th>What</th><th>Since</th><th>Status</th><th></th></tr></thead><tbody>${L.map(e=>`<tr><td>${esc(e.label)}</td><td class="muted">${new Date(e.at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</td>
+      <td>${e.failed?`<span class="pill p-bad">Not accepted</span><div class="muted" style="font-size:11px">${esc(e.err)}</div>`:`<span class="pill p-warn">Waiting</span>`}</td>
+      <td class="num" style="white-space:nowrap"><button type="button" class="btn sm" data-oretry="${esc(e.kind+"|"+e.id)}">Retry</button> ${e.failed?`<button type="button" class="btn sec sm" data-odrop="${esc(e.kind+"|"+e.id)}">Discard</button>`:""}</td></tr>`).join("")||`<tr><td colspan="4" class="muted">Nothing waiting.</td></tr>`}</tbody></table>`,()=>{});
+  document.querySelectorAll("[data-oretry]").forEach(b=>b.onclick=()=>{const e=sbOut[b.dataset.oretry];if(e){e.failed=false;e.tries=0;sbOutSave()}sbOutApply();persist();closeModal();toast("Retrying…")});
+  document.querySelectorAll("[data-odrop]").forEach(b=>b.onclick=()=>{if(!confirm("Discard this change? It will be lost."))return;delete sbOut[b.dataset.odrop];sbOutSave();sbOutBadge();closeModal();sbLiveDirty.add("work_order");SB_LIVE_T.forEach(t=>sbLiveDirty.add(t));sbLiveKick(200)});
+}
+/* retry every 15 s while something is waiting, and right away when the internet comes back */
+setInterval(()=>{if(me&&!sbBooting&&sbOutList().some(e=>!e.failed)&&navigator.onLine!==false){sbOutApply();persist()}},15000);
+if(typeof window!=="undefined"){window.addEventListener("online",()=>{if(me&&!sbBooting){sbOutApply();persist()}sbOutBadge()});window.addEventListener("offline",sbOutBadge)}
+
+function sbQueueWO(w){const key=sbWoKey(w);sbSnap.wo[w.id]=key;if(!w.sbId)w.sbPending=true;sbOutAdd("wo",w.id,w,key,sbBase[w.id]);
+  sbWoQ[w.id]=(sbWoQ[w.id]||Promise.resolve()).then(()=>sbSaveWO(w)).then(()=>{sbOutDone("wo",w.id,key);_sbPersist()})
+    .catch(e=>{console.error(e);delete sbSnap.wo[w.id];if(!sbOutFail("wo",w.id,e))toast("Work order "+w.id+" not saved to Supabase: "+(e.message||e))})}
 
 
 /* ---- part 5: operator terminal records (runs, stops, material use, scrap/rework log) ---- */
@@ -243,9 +293,9 @@ async function sbSaveLog(coll,x){
     const {data,error}=await SB.from(c.t).insert(row).select("id").single();if(error)throw error;x.sbId=data.id;delete x.sbPending}
   else{const {error}=await SB.from(c.t).update(row).eq("id",x.sbId);if(error)throw error}
 }
-function sbQueueLog(coll,x){const k=coll+"|"+x.id;sbSnap[coll][x.id]=sbLogKey(x);if(!x.sbId)x.sbPending=true;
-  sbLogQ[k]=(sbLogQ[k]||Promise.resolve()).then(()=>sbSaveLog(coll,x)).then(()=>{_sbPersist()})
-    .catch(e=>{console.warn(e);delete sbSnap[coll][x.id];if(!/^waiting/.test(e.message||""))toast("Not saved to Supabase: "+(e.message||e))})}
+function sbQueueLog(coll,x){const k=coll+"|"+x.id,key=sbLogKey(x);sbSnap[coll][x.id]=key;if(!x.sbId)x.sbPending=true;sbOutAdd("log:"+coll,x.id,x,key);
+  sbLogQ[k]=(sbLogQ[k]||Promise.resolve()).then(()=>sbSaveLog(coll,x)).then(()=>{sbOutDone("log:"+coll,x.id,key);_sbPersist()})
+    .catch(e=>{console.warn(e);delete sbSnap[coll][x.id];if(/^waiting/.test(e.message||""))return;if(!sbOutFail("log:"+coll,x.id,e))toast("Not saved to Supabase: "+(e.message||e))})}
 /* two terminals on the same work order: add this device's progress to the latest server figures */
 const SB_NUM=["done","scrap","rw","rs"];
 async function sbMergeWO(w,dl){
@@ -346,9 +396,9 @@ async function sbSaveShip(s){
   else await sbOk(SB.from("proof_of_delivery").delete().eq("shipment_id",sid));
   sbShipBase[s.id]=JSON.parse(JSON.stringify(sbClean(s)));sbSnap.ship[s.id]=sbShipKey(s);
 }
-function sbQueueShip(s){sbSnap.ship[s.id]=sbShipKey(s);if(!s.sbId)s.sbPending=true;
-  sbShipQ.set(s,(sbShipQ.get(s)||Promise.resolve()).then(()=>sbSaveShip(s)).then(()=>{_sbPersist()})
-    .catch(e=>{console.error(e);delete sbSnap.ship[s.id];toast("Shipment "+s.id+" not saved to Supabase: "+(e.message||e))}))}
+function sbQueueShip(s){const key=sbShipKey(s);sbSnap.ship[s.id]=key;if(!s.sbId)s.sbPending=true;sbOutAdd("ship",s.id,s,key,sbShipBase[s.id]);
+  sbShipQ.set(s,(sbShipQ.get(s)||Promise.resolve()).then(()=>sbSaveShip(s)).then(()=>{sbOutDone("ship",s.id,key);_sbPersist()})
+    .catch(e=>{console.error(e);delete sbSnap.ship[s.id];if(!sbOutFail("ship",s.id,e))toast("Shipment "+s.id+" not saved to Supabase: "+(e.message||e))}))}
 
 /* push changes made in the MES back to Supabase: task status, station state, work orders, terminal records, shipments */
 
@@ -377,13 +427,13 @@ const sbCan={
 let sbDeniedWO=new Set();
 const _sbPersist=persist;
 persist=function(){if(me&&!sbBooting){try{syncTailFromCrates()}catch(e){console.warn(e)}}const r=_sbPersist();if(!me||sbBooting)return r;
-  (sbCan.task()?(db.tasks||[]):[]).filter(k=>k.sbId&&sbSnap.task[k.sbId]!==sbTaskKey(k)).forEach(k=>{sbSnap.task[k.sbId]=sbTaskKey(k);
+  (sbCan.task()?(db.tasks||[]):[]).filter(k=>k.sbId&&sbSnap.task[k.sbId]!==sbTaskKey(k)).forEach(k=>{const tk=sbTaskKey(k);sbSnap.task[k.sbId]=tk;sbOutAdd("task",k.sbId,k,tk);
     SB.from("project_task").update({status:k.status==="inprog"?"in progress":k.status,done_at:k.doneAt||null,done_by:k.doneBy||null,zoho_pct:Math.round(k.zohoPct||0)}).eq("id",k.sbId)
-      .then(({error})=>{if(error){delete sbSnap.task[k.sbId];toast("Could not save task to Supabase")}})});
+      .then(({error})=>{if(error){delete sbSnap.task[k.sbId];if(!sbOutFail("task",k.sbId,error))toast("Could not save task to Supabase")}else sbOutDone("task",k.sbId,tk)},e=>{delete sbSnap.task[k.sbId];sbOutFail("task",k.sbId,e)})});
   sbSnap.op=sbSnap.op||{};(sbCan.full()?(db.operators||[]):[]).filter(o=>sbSnap.op[o.id]!==sbOpKey(o)).forEach(o=>{sbSnap.op[o.id]=sbOpKey(o);sbSaveOp(o)});
-  (db.machines||[]).filter(x=>x.sbId&&sbSnap.mach[x.id]!==sbMachKey(x)&&sbCan.mach(x)).forEach(x=>{sbSnap.mach[x.id]=sbMachKey(x);
+  (db.machines||[]).filter(x=>x.sbId&&sbSnap.mach[x.id]!==sbMachKey(x)&&sbCan.mach(x)).forEach(x=>{const mk=sbMachKey(x);sbSnap.mach[x.id]=mk;sbOutAdd("mach",x.id,x,mk);
     SB.from("machine").update({state:["run","stopped","out"].includes(x.state)?x.state:"run",stop_reason:x.reason||null}).eq("id",x.sbId)
-      .then(({error})=>{if(error){delete sbSnap.mach[x.id];toast("Could not save station state to Supabase")}})});
+      .then(({error})=>{if(error){delete sbSnap.mach[x.id];if(!sbOutFail("mach",x.id,error))toast("Could not save station state to Supabase")}else sbOutDone("mach",x.id,mk)},e=>{delete sbSnap.mach[x.id];sbOutFail("mach",x.id,e)})});
   /* only work orders of projects that exist in Supabase (stops old demo orders being uploaded) */
   (db.workorders||[]).filter(w=>sbSnap.wo[w.id]!==sbWoKey(w)&&(w.sbId||(by(db.projects,w.project)||{}).sbId)).forEach(w=>{if(sbCan.wo(w))return sbQueueWO(w);
     if(!w.sbId&&!sbDeniedWO.has(w.id)){sbDeniedWO.add(w.id);toast("Only the Production Manager can create work orders. "+w.id+" was not saved.")}});
@@ -492,11 +542,12 @@ async function sbBoot(){
     const s5=await sbLoadWOs();
     const s6=await sbLoadLogs();
     const s7=await sbLoadShipments();
+    const sOut=sbOutApply();
     u.ws=u.wsIds.map(id=>sbMap.ws[id]).filter(Boolean);u.op=u.opId?(sbMap.op[u.opId]||""):"";
     sbLastSync=new Date();
     db.syncLog=db.syncLog||[];db.syncLog.unshift({at:sbLastSync.toISOString(),dir:"in",msg:`Supabase: ${s3.w} workshops, ${s3.m} stations, ${s3.a} assets, ${s3.o} team leaders, ${s3.raw} raw materials · ${s2.p} project(s), ${s2.t} tasks, ${s2.d} dependencies · ${s4.n} products, ${s5.n} work orders · ${s6.executions} runs, ${s6.stops} stops, ${s6.consumption} material records · ${s7.n} shipments`});
     _sbPersist();
-    me=u;sbBooting=false;if(!myViews().includes(view))view=myViews()[0];render();sbIdleReset();sbLiveStart();
+    me=u;sbBooting=false;if(!myViews().includes(view))view=myViews()[0];render();sbIdleReset();sbLiveStart();sbOutBadge();if(sOut)setTimeout(()=>persist(),400);
   }catch(e){sbBooting=false;console.error(e);$("#main").innerHTML=`<div class="card" style="max-width:520px;margin:40px auto"><h2>Could not load data from Supabase</h2><p class="muted">${esc(e.message||String(e))}</p><button class="btn" onclick="location.reload()">Try again</button></div>`}
 }
 loginScreen=function(){
@@ -669,7 +720,9 @@ async function sbLiveRefresh(){
     if(has("work_order","work_order_operation","execution"))await sbLoadWOs();
     if(has("execution","stop_event","material_issue","scrap_log","work_order"))await sbLoadLogs();
     if(has("shipment","crate"))await sbLoadShipments();
+    const nOut=sbOutApply();
     sbBooting=true;try{try{syncTailFromCrates()}catch(e){}_sbPersist()}finally{sbBooting=false}
+    if(nOut)setTimeout(()=>persist(),300);
     sbLastSync=new Date();sbLiveAt=Date.now();
     if(sbBusyUI()){sbLiveKick(2500);sbLiveDirty.add("_render");return}
     render();
