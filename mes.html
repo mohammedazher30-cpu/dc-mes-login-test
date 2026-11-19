@@ -2759,8 +2759,51 @@ logout=async function(){if(sbIsTablet()){me=null;clearTimeout(sbIdleT);try{await
 /* Admin: tablets and team leader PINs, shown on the Users screen */
 const _sbVUsers=typeof vUsers==="function"?vUsers:null;
 if(_sbVUsers)vUsers=function(){_sbVUsers();if(!me||me.role!=="admin")return;
-  $("#main").insertAdjacentHTML("beforeend",`<div id="sbTabAdmin"><div class="head" style="margin-top:22px"><h1 style="font-size:20px">Tablets & team leader PINs</h1></div><div class="card"><div class="muted">Loading…</div></div></div>`);
-  sbTabAdmin()};
+  $("#main").insertAdjacentHTML("beforeend",`<div id="sbTabAdmin"><div class="head" style="margin-top:22px"><h1 style="font-size:20px">Tablets & team leader PINs</h1></div><div class="card"><div class="muted">Loading…</div></div></div>
+    <div id="sbZoho"><div class="head" style="margin-top:22px"><h1 style="font-size:20px">Zoho connection</h1></div><div class="card"><div class="muted">Loading…</div></div></div>`);
+  sbTabAdmin();sbZohoAdmin()};
+/* ---- part 10a: Zoho connection (admin) ---- */
+let sbZohoLast=null;
+async function sbZohoAdmin(){
+  const box=$("#sbZoho");if(!box)return;const card=box.querySelector(".card");
+  const st=await sbFn("zoho-sync",{action:"status"});if(!$("#sbZoho"))return;
+  if(!st.ok){card.innerHTML=`<div class="muted">${esc(st.error)}</div>`;return}
+  const fmt=d=>d?new Date(d).toLocaleString():"—";
+  if(!st.connected){
+    card.innerHTML=`<div class="muted" style="margin-bottom:10px">Not connected. With the Zoho admin: create a <b>Self Client</b> in the Zoho API Console, generate a code (scopes below), then paste the 3 values here within 10 minutes.</div>
+      <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <label style="min-width:150px">Zoho domain<br><select id="zDc"><option value="com">zoho.com</option><option value="sa">zoho.sa (Saudi)</option><option value="eu">zoho.eu</option><option value="in">zoho.in</option></select></label>
+        <label style="flex:1;min-width:220px">Client ID<br><input id="zCid" autocomplete="off" style="width:100%"></label>
+        <label style="flex:1;min-width:220px">Client Secret<br><input id="zSec" type="password" autocomplete="off" style="width:100%"></label>
+        <label style="flex:1;min-width:220px">Generated code<br><input id="zCode" autocomplete="off" style="width:100%"></label>
+        <button class="btn" id="zConnect">🔗 Connect to Zoho</button></div>
+      <div class="note" style="margin-top:10px">Scopes for the code: <code style="user-select:all;word-break:break-all">ZohoProjects.portals.READ,ZohoProjects.projects.READ,ZohoProjects.tasklists.READ,ZohoProjects.tasks.READ,ZohoProjects.tasks.UPDATE,ZohoProjects.users.READ,ZohoInventory.items.READ,ZohoInventory.settings.READ</code></div>
+      <div id="zMsg" class="note"></div>`;
+    $("#zConnect").onclick=async()=>{const b=$("#zConnect");b.disabled=true;$("#zMsg").style.color="";$("#zMsg").textContent="Connecting to Zoho…";
+      const r=await sbFn("zoho-sync",{action:"connect",dc:$("#zDc").value,client_id:$("#zCid").value,client_secret:$("#zSec").value,code:$("#zCode").value});
+      b.disabled=false;if(!r.ok&&!r.connected){$("#zMsg").style.color="var(--bad)";$("#zMsg").textContent=r.error;return}
+      sbZohoLast=r;toast("Zoho connected");sbZohoAdmin()};
+    return}
+  card.innerHTML=`<div class="row" style="gap:16px;flex-wrap:wrap">
+      <div><span class="pill p-ok">Connected</span> zoho.${esc(st.dc)}</div>
+      <div class="muted">Portal: <b>${esc(st.portal||"—")}</b> · Inventory: <b>${esc(st.inventory_org||"—")}</b></div>
+      <div class="muted">By ${esc(st.connected_by||"—")} · ${fmt(st.connected_at)} · last OK ${fmt(st.last_ok_at)}</div></div>
+    ${st.last_error?`<div class="note" style="color:var(--bad)">Last error: ${esc(st.last_error)}</div>`:""}
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn" id="zTest">🔄 Test connection</button><button class="btn sec sm" id="zDisc">Disconnect</button></div>
+    <div id="zOut" style="margin-top:12px"></div>`;
+  const show=r=>{const o=$("#zOut");if(!o)return;
+    if(!r.ok){o.innerHTML=`<div class="note" style="color:var(--bad)">${esc(r.error||r.test_error||"Test failed")}</div>`;return}
+    const P=r.projects||[];
+    o.innerHTML=`${r.test_error?`<div class="note" style="color:var(--bad)">${esc(r.test_error)}</div>`:""}
+      <div class="muted" style="margin-bottom:6px">Zoho Projects portal <b>${esc((r.portal||{}).name||"")}</b>: ${P.length} project(s) read${r.projects_error?` · <span style="color:var(--bad)">${esc(r.projects_error)}</span>`:""}.
+        Zoho Inventory: ${r.inventory_error?`<span style="color:var(--bad)">${esc(r.inventory_error)}</span>`:esc((r.inventory_orgs||[]).map(x=>x.name).join(", ")||"—")}</div>
+      ${P.length?`<div class="card" style="padding:0;overflow:auto;max-height:340px"><table><thead><tr><th>Key</th><th>Zoho project</th><th>Status</th><th>Owner</th><th>In MES</th></tr></thead><tbody>
+        ${P.map(p=>{const inMes=(db.projects||[]).some(x=>x.zohoId&&(x.zohoId===p.key||x.zohoId===p.id)||x.name===p.name);return `<tr><td>${esc(p.key)}</td><td>${esc(p.name)}</td><td>${esc(p.status)}</td><td>${esc(p.owner)}</td><td>${inMes?`<span class="pill p-ok">Yes</span>`:`<span class="muted">—</span>`}</td></tr>`}).join("")}
+      </tbody></table></div><div class="note">Next step (10b): a "Show in MES" switch per project and the automatic sync.</div>`:(r.projects_raw?`<pre style="white-space:pre-wrap;font-size:11px">${esc(r.projects_raw)}</pre>`:"")}`};
+  if(sbZohoLast){show(sbZohoLast);sbZohoLast=null}
+  $("#zTest").onclick=async()=>{$("#zTest").disabled=true;$("#zOut").innerHTML=`<div class="muted">Reading from Zoho…</div>`;const r=await sbFn("zoho-sync",{action:"test"});const b=$("#zTest");if(b)b.disabled=false;show(r)};
+  $("#zDisc").onclick=async()=>{if(!confirm("Disconnect Zoho? The MES will stop reading from Zoho until it is connected again."))return;await sbFn("zoho-sync",{action:"disconnect"});toast("Zoho disconnected");sbZohoAdmin()};
+}
 async function sbTabAdmin(){
   const box=$("#sbTabAdmin");if(!box)return;const r=await sbFn("tablet-admin",{action:"list"});
   if(!$("#sbTabAdmin"))return;
